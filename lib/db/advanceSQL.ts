@@ -12,11 +12,13 @@ import {
 type Executor = Pool | PoolConnection;
 
 /**
- * Table-agnostic CRUD helpers, all parameterized. TypeScript port of the
+ * Table-agnostic CRUD helpers. This is a TypeScript port of the
  * advanceSelect/advanceInsert/advanceUpdate/advanceDelete toolkit from
- * elementTouch/server/advanceSQL.php — same shape and intent (a small,
- * reusable data-access layer any route/module can call), but every value is
- * bound as a `?` placeholder instead of interpolated into the SQL string.
+ * elementTouch/server/advanceSQL.php: a small, reusable data-access layer
+ * that any route or module can call for any table, without writing raw SQL
+ * itself. The one intentional difference from the PHP original is that
+ * every value here is bound as a `?` placeholder and passed to `mysql2`
+ * separately, instead of being written directly into the SQL string.
  */
 
 export async function advanceSelect<T extends RowDataPacket = RowDataPacket>(
@@ -76,7 +78,12 @@ export async function advanceDelete(
   return result.affectedRows;
 }
 
-/** Deletes every row in `table`. Separate from `advanceDelete` on purpose — see `buildDeleteAllQuery`. */
+/**
+ * Deletes every row in `table`. Kept as its own function, separate from
+ * `advanceDelete`, so that an empty or missing condition can never be
+ * mistaken for "delete everything." See `buildDeleteAllQuery` for the query
+ * this runs.
+ */
 export async function advanceDeleteAll(table: string, conn: Executor = getPool()): Promise<number> {
   const { sql, params } = buildDeleteAllQuery(table);
   const [result] = await conn.query<ResultSetHeader>(sql, params);

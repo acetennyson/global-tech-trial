@@ -1,7 +1,39 @@
-import { describe, expect, it } from "vitest";
-import { filtersToCondition, rowToTask } from "../repository";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TaskRow } from "@/lib/types";
 import { taskFiltersSchema } from "@/lib/validation/task";
+
+vi.mock("@/lib/db/advanceSQL", () => ({
+  advanceSelect: vi.fn(),
+  advanceCount: vi.fn(),
+  advanceInsert: vi.fn(),
+  advanceUpdate: vi.fn(),
+  advanceDelete: vi.fn(),
+  advanceDeleteAll: vi.fn(),
+}));
+
+const advanceSQL = await import("@/lib/db/advanceSQL");
+const { filtersToCondition, listTasks, rowToTask } = await import("../repository");
+
+function row(id: number): TaskRow {
+  return {
+    id,
+    parent_id: null,
+    title: `Task ${id}`,
+    description: null,
+    status: "todo",
+    visible: 1,
+    start_time: "2026-01-01 09:00:00",
+    end_time: "2026-01-01 17:00:00",
+    created_by_id: "user-1",
+    created_by_name: "Ada",
+    created_at: "2026-01-01 08:00:00",
+    updated_at: "2026-01-01 08:00:00",
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("rowToTask", () => {
   it("maps snake_case DB columns to the camelCase API shape", () => {
@@ -62,5 +94,59 @@ describe("filtersToCondition", () => {
     const condition = filtersToCondition(filters);
     expect(condition.__GREATER).toEqual({ start_time: "2026-01-01T00:00:00Z" });
     expect(condition.__LESSER).toBeUndefined();
+  });
+
+  it("maps multi-column `sort` to __ORDERBY with offset pagination", () => {
+    const filters = taskFiltersSchema.parse({ sort: "status,-startTime", limit: "20", offset: "40" });
+    const condition = filtersToCondition(filters);
+    expect(condition.__ORDERBY).toEqual([
+      { column: "status", asc: true },
+      { column: "start_time", asc: false },
+    ]);
+    expect(condition.__LIMIT).toBe(20);
+    expect(condition.__OFFSET).toBe(40);
+  });
+
+  it("switches to id-based keyset pagination when `cursor` is given, ignoring `sort`/`offset`", () => {
+    const filters = taskFiltersSchema.parse({ cursor: "100", sort: "status", offset: "40", limit: "20" });
+    const condition = filtersToCondition(filters);
+    expect(condition.__GREATER).toEqual({ id: 100 });
+    expect(condition.__ORDERBY).toEqual([{ column: "id", asc: true }]);
+    expect(condition.__LIMIT).toBe(20);
+    expect(condition.__OFFSET).toBeUndefined();
+  });
+
+  it("merges a cursor with an existing time-range __GREATER instead of overwriting it", () => {
+    const filters = taskFiltersSchema.parse({ cursor: "100", from: "2026-01-01T00:00:00Z" });
+    const condition = filtersToCondition(filters);
+    expect(condition.__GREATER).toEqual({ start_time: "2026-01-01T00:00:00Z", id: 100 });
+  });
+});
+
+describe("listTasks", () => {
+  it("computes total/page/totalPages/hasMore in offset mode", async () => {
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValue([row(41), row(42)] as never);
+    vi.mocked(advanceSQL.advanceCount).mockResolvedValue(42);
+
+    const filters = taskFiltersSchema.parse({ limit: "2", offset: "40" });
+    const result = await listTasks(filters);
+
+    expect(result.total).toBe(42);
+    expect(result.page).toBe(21); // offset 40 / limit 2 + 1
+    expect(result.totalPages).toBe(21);
+    expect(result.hasMore).toBe(false); // 40 + 2 items === total
+    expect(result.nextCursor).toBeNull();
+  });
+
+  it("returns a nextCursor instead of a total in cursor mode", async () => {
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValue([row(101), row(102)] as never);
+
+    const filters = taskFiltersSchema.parse({ cursor: "100", limit: "2" });
+    const result = await listTasks(filters);
+
+    expect(advanceSQL.advanceCount).not.toHaveBeenCalled();
+    expect(result.total).toBeNull();
+    expect(result.hasMore).toBe(true); // got a full page, so there may be more
+    expect(result.nextCursor).toBe(102); // id of the last row
   });
 });

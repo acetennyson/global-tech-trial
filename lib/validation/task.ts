@@ -86,6 +86,44 @@ const csvStatuses = z.string().transform((value, ctx) => {
   return parsed.data;
 });
 
+const SORTABLE_FIELDS = ["id", "title", "status", "startTime", "endTime", "createdAt", "updatedAt"] as const;
+export type SortableField = (typeof SORTABLE_FIELDS)[number];
+
+export interface SortField {
+  field: SortableField;
+  asc: boolean;
+}
+
+const DEFAULT_SORT: SortField[] = [{ field: "createdAt", asc: false }];
+
+/**
+ * Parses the `sort` query parameter: a comma-separated list of field names,
+ * for example `sort=status,-startTime`. Each field sorts ascending by
+ * default; a leading `-` makes it descending, and a leading `+` explicitly
+ * marks it ascending (allowed for symmetry, though it's the default anyway).
+ * Listing more than one field means later fields break ties between rows
+ * that are equal on the earlier ones: `sort=status,-startTime` groups tasks
+ * by status first, and within each status, orders them by startTime,
+ * newest first.
+ */
+const sortSchema = z.string().transform((value, ctx) => {
+  const specs: SortField[] = [];
+  for (const raw of splitCsv(value)) {
+    const desc = raw.startsWith("-");
+    const field = desc ? raw.slice(1) : raw.startsWith("+") ? raw.slice(1) : raw;
+    const parsed = z.enum(SORTABLE_FIELDS).safeParse(field);
+    if (!parsed.success) {
+      ctx.addIssue({
+        code: "custom",
+        message: `Unknown sort field "${field}". Allowed: ${SORTABLE_FIELDS.join(", ")}`,
+      });
+      return z.NEVER;
+    }
+    specs.push({ field: parsed.data, asc: !desc });
+  }
+  return specs;
+});
+
 export const taskFiltersSchema = z.object({
   id: csvNumbers.optional(),
   status: csvStatuses.optional(),
@@ -99,13 +137,17 @@ export const taskFiltersSchema = z.object({
     .transform((v) => v === "true")
     .optional(),
   search: z.string().trim().min(1).optional(),
-  orderBy: z.enum(["id", "title", "status", "startTime", "endTime", "createdAt", "updatedAt"]).default("createdAt"),
-  asc: z
-    .enum(["true", "false"])
-    .transform((v) => v === "true")
-    .default(false),
+  sort: sortSchema.default(DEFAULT_SORT),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
+  /**
+   * The id of the last task the client saw, for keyset pagination. When
+   * this is set, the repository ignores `offset` and returns the next
+   * batch of tasks with an id greater than this one instead. See the
+   * "Choosing between offset and cursor" section of the README for why
+   * these two are alternatives rather than something you'd combine.
+   */
+  cursor: positiveInt.optional(),
 });
 
 export type TaskFiltersInput = z.infer<typeof taskFiltersSchema>;

@@ -1,12 +1,14 @@
 /**
  * Auth resolution for API routes.
  *
- * This project has no session/JWT provider wired up yet, so the "signed-in
- * user" is resolved from request headers that a real auth layer (NextAuth,
- * a JWT middleware, a gateway, ...) would set after verifying a token.
- * Swap `resolveAuthUser` for real verification later — every caller in this
- * codebase already treats it as the single source of truth for "who is
- * making this request", and never trusts a client-supplied `createdBy`.
+ * This project has no session or JWT provider wired up yet, so the
+ * "signed-in user" is resolved from request headers instead: the headers a
+ * real auth layer (NextAuth, a JWT middleware, a gateway) would normally set
+ * after verifying a token. Every caller in this codebase already treats
+ * `resolveAuthUser` as the single source of truth for "who is making this
+ * request", and never trusts a client-supplied `createdBy`, so swapping in
+ * real token verification later only means changing the body of this one
+ * function.
  */
 
 export interface AuthUser {

@@ -1,17 +1,24 @@
 /**
- * Pure SQL builders — no I/O, no DB connection. Every function returns
- * `{ sql, params }` for a parameterized (`?`) query, so callers execute it
- * however they like (pool, transaction, test double) and these builders can
- * be unit-tested without a database.
+ * Pure SQL builders. Nothing in this file opens a database connection or
+ * performs any I/O: every function just returns a `{ sql, params }` pair for
+ * a parameterized (`?`) query. That's what lets these functions be unit
+ * tested directly, with plain assertions on the generated SQL string,
+ * instead of needing a real database to run against.
  *
- * Modeled after the `advanceSelect/advanceInsert/advanceUpdate/advanceDelete`
- * toolkit in elementTouch/server/advanceSQL.php, adapted to always use bound
- * parameters instead of string interpolation.
+ * This is modeled after the `advanceSelect`/`advanceInsert`/`advanceUpdate`/
+ * `advanceDelete` toolkit in elementTouch/server/advanceSQL.php, adapted so
+ * every value is always bound as a parameter instead of being written
+ * directly into the SQL string.
  */
 
 export interface BuiltQuery {
   sql: string;
   params: unknown[];
+}
+
+export interface SortSpec {
+  column: string;
+  asc?: boolean;
 }
 
 /** Special condition keys understood by `buildWhere` (mirrors the `__KEY` convention from advanceSQL.php). */
@@ -21,7 +28,8 @@ export interface ConditionModifiers {
   __BETWEEN?: Record<string, [unknown, unknown]>;
   __IN?: Record<string, unknown[]>;
   __SEARCH?: { columns: string[]; term: string };
-  __ORDERBY?: string;
+  /** A single column (paired with `__ASC`) or an ordered list for multi-column sort, e.g. `[{column:"status"}, {column:"startTime", asc:false}]`. */
+  __ORDERBY?: string | SortSpec[];
   __ASC?: boolean;
   __LIMIT?: number;
   __OFFSET?: number;
@@ -87,7 +95,11 @@ export function buildWhere(condition: Condition = {}): {
     for (const [key, values] of Object.entries(__IN)) {
       assertSafeIdentifier(key);
       if (values.length === 0) {
-        // an empty IN() must never match — short-circuit the whole query
+        // An empty list must match nothing, not everything: `column IN ()` is
+        // invalid SQL, and skipping the clause entirely would silently turn
+        // this filter off instead of returning zero rows. `1 = 0` forces the
+        // whole query to return no rows, which is the correct result for
+        // "match one of these zero values."
         clauses.push("1 = 0");
         continue;
       }
@@ -119,9 +131,13 @@ export function buildWhere(condition: Condition = {}): {
   }
 
   let suffix = "";
-  if (__ORDERBY) {
+  if (typeof __ORDERBY === "string") {
     assertSafeIdentifier(__ORDERBY);
     suffix += ` ORDER BY ${__ORDERBY} ${__ASC === false ? "DESC" : "ASC"}`;
+  } else if (__ORDERBY && __ORDERBY.length > 0) {
+    __ORDERBY.forEach((spec) => assertSafeIdentifier(spec.column));
+    const parts = __ORDERBY.map((spec) => `${spec.column} ${spec.asc === false ? "DESC" : "ASC"}`);
+    suffix += ` ORDER BY ${parts.join(", ")}`;
   }
   if (typeof __LIMIT === "number") {
     suffix += ` LIMIT ${Math.max(0, Math.trunc(__LIMIT))}`;
@@ -191,7 +207,13 @@ export function buildDeleteQuery(table: string, condition: Condition): BuiltQuer
   return { sql, params };
 }
 
-/** Explicit, unguarded "delete every row" — separate from `buildDeleteQuery` so an empty/mistaken condition can never wipe a table by accident. */
+/**
+ * Deletes every row in `table`, with no WHERE clause at all. This is kept as
+ * its own function, separate from `buildDeleteQuery`, so that a missing or
+ * mistakenly empty condition can never be silently treated as "delete
+ * everything": `buildDeleteQuery` always requires a real condition, and this
+ * function is the only way to delete everything on purpose.
+ */
 export function buildDeleteAllQuery(table: string): BuiltQuery {
   assertSafeIdentifier(table);
   return { sql: `DELETE FROM ${table}`, params: [] };

@@ -46,20 +46,3 @@ export interface CreateTaskInput {
 
 /** Fields a client may submit when updating a task. Everything is optional. */
 export type UpdateTaskInput = Partial<CreateTaskInput>;
-
-/** Query-string filters accepted by `GET /api/tasks`. */
-export interface TaskFilters {
-  id?: number[];
-  status?: TaskStatus[];
-  creator?: string;
-  timeField?: "start" | "end";
-  from?: string;
-  to?: string;
-  parentId?: number | null;
-  visible?: boolean;
-  search?: string;
-  orderBy?: string;
-  asc?: boolean;
-  limit?: number;
-  offset?: number;
-}

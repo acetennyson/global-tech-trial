@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Task } from "@/lib/types";
+import type { TaskPage } from "@/lib/tasks/repository";
 
 vi.mock("@/lib/tasks/repository", () => ({
   listTasks: vi.fn(),
@@ -31,9 +32,20 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+const samplePage: TaskPage = {
+  items: [sampleTask],
+  limit: 10,
+  offset: 0,
+  page: 1,
+  totalPages: 1,
+  total: 1,
+  hasMore: false,
+  nextCursor: null,
+};
+
 describe("GET /api/tasks", () => {
   it("lists tasks using filters parsed from the query string", async () => {
-    vi.mocked(repo.listTasks).mockResolvedValue({ items: [sampleTask], total: 1 });
+    vi.mocked(repo.listTasks).mockResolvedValue(samplePage);
 
     const res = await GET(new Request("http://localhost/api/tasks?status=todo&limit=10"));
     const body = await res.json();

@@ -43,6 +43,16 @@ describe("buildSelectQuery", () => {
     expect(params).toEqual(["%urgent%", "%urgent%"]);
   });
 
+  it("supports multi-column sort via a __ORDERBY array", () => {
+    const { sql } = buildSelectQuery("tasks", "*", {
+      __ORDERBY: [
+        { column: "status", asc: true },
+        { column: "start_time", asc: false },
+      ],
+    });
+    expect(sql).toBe("SELECT * FROM tasks ORDER BY status ASC, start_time DESC");
+  });
+
   it("rejects identifiers that aren't safe SQL names", () => {
     expect(() => buildSelectQuery("tasks; DROP TABLE tasks", "*", {})).toThrow(/Unsafe SQL identifier/);
     expect(() => buildSelectQuery("tasks", "*", { "id = 1 OR 1=1": "x" })).toThrow(/Unsafe SQL identifier/);

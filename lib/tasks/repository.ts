@@ -10,13 +10,13 @@ import {
 import type { Condition } from "@/lib/db/queryBuilder";
 import type { AuthUser } from "@/lib/auth";
 import type { CreateTaskInput, Task, TaskRow, UpdateTaskInput } from "@/lib/types";
-import type { TaskFiltersInput } from "@/lib/validation/task";
+import type { SortableField, TaskFiltersInput } from "@/lib/validation/task";
 
 const TABLE = "tasks";
 
 type TaskRowPacket = TaskRow & RowDataPacket;
 
-/** DB row (snake_case) -> API shape (camelCase). The one place that knows about the column mapping. */
+/** Converts a database row (snake_case columns) into the API's task shape (camelCase fields). This is the one place in the codebase that knows the column mapping, so it's also the only place that needs to change if a column is ever renamed. */
 export function rowToTask(row: TaskRow): Task {
   return {
     id: row.id,
@@ -60,6 +60,16 @@ function updateInputToRow(input: UpdateTaskInput): Record<string, unknown> {
   return row;
 }
 
+const SORT_FIELD_TO_COLUMN: Record<SortableField, string> = {
+  id: "id",
+  title: "title",
+  status: "status",
+  startTime: "start_time",
+  endTime: "end_time",
+  createdAt: "created_at",
+  updatedAt: "updated_at",
+};
+
 /** Translates parsed query filters into a query-builder `Condition`. */
 export function filtersToCondition(filters: TaskFiltersInput): Condition {
   const condition: Condition = {};
@@ -83,30 +93,73 @@ export function filtersToCondition(filters: TaskFiltersInput): Condition {
     condition.__SEARCH = { columns: ["title", "description"], term: filters.search };
   }
 
-  const orderByColumn: Record<TaskFiltersInput["orderBy"], string> = {
-    id: "id",
-    title: "title",
-    status: "status",
-    startTime: "start_time",
-    endTime: "end_time",
-    createdAt: "created_at",
-    updatedAt: "updated_at",
-  };
-  condition.__ORDERBY = orderByColumn[filters.orderBy];
-  condition.__ASC = filters.asc;
-  condition.__LIMIT = filters.limit;
-  condition.__OFFSET = filters.offset;
+  if (filters.cursor !== undefined) {
+    // Keyset pagination: instead of skipping rows with OFFSET, ask directly
+    // for rows with id greater than the last one the client saw. This is a
+    // single indexed lookup, so it costs the same whether it's page 1 or
+    // page 100,000. See the "Scaling to 1 million users" section of the
+    // README for the full comparison against offset-based pagination.
+    condition.__GREATER = { ...condition.__GREATER, id: filters.cursor };
+    condition.__ORDERBY = [{ column: "id", asc: true }];
+    condition.__LIMIT = filters.limit;
+  } else {
+    condition.__ORDERBY = filters.sort.map((s) => ({ column: SORT_FIELD_TO_COLUMN[s.field], asc: s.asc }));
+    condition.__LIMIT = filters.limit;
+    condition.__OFFSET = filters.offset;
+  }
 
   return condition;
 }
 
-export async function listTasks(filters: TaskFiltersInput): Promise<{ items: Task[]; total: number }> {
+export interface TaskPage {
+  items: Task[];
+  limit: number;
+  /** The offset that was applied. `null` when this page was fetched with `cursor` instead. */
+  offset: number | null;
+  /** The 1-based page number this response represents. `null` in cursor mode. */
+  page: number | null;
+  /** How many pages of this size exist in total. `null` in cursor mode. */
+  totalPages: number | null;
+  /**
+   * The total number of matching rows across all pages. `null` in cursor
+   * mode, because computing it would require the same expensive COUNT(*)
+   * that cursor pagination exists to avoid. See the README for details.
+   */
+  total: number | null;
+  hasMore: boolean;
+  /** In cursor mode, the value to pass as the next request's `cursor`. `null` in offset mode, and `null` here too once there are no more pages. */
+  nextCursor: number | null;
+}
+
+export async function listTasks(filters: TaskFiltersInput): Promise<TaskPage> {
   const condition = filtersToCondition(filters);
-  const [rows, total] = await Promise.all([
-    advanceSelect<TaskRowPacket>(TABLE, "*", condition),
-    advanceCount(TABLE, condition),
-  ]);
-  return { items: rows.map(rowToTask), total };
+  const items = (await advanceSelect<TaskRowPacket>(TABLE, "*", condition)).map(rowToTask);
+
+  if (filters.cursor !== undefined) {
+    const hasMore = items.length === filters.limit;
+    return {
+      items,
+      limit: filters.limit,
+      offset: null,
+      page: null,
+      totalPages: null,
+      total: null,
+      hasMore,
+      nextCursor: hasMore ? items[items.length - 1].id : null,
+    };
+  }
+
+  const total = await advanceCount(TABLE, condition);
+  return {
+    items,
+    limit: filters.limit,
+    offset: filters.offset,
+    page: Math.floor(filters.offset / filters.limit) + 1,
+    totalPages: Math.max(1, Math.ceil(total / filters.limit)),
+    total,
+    hasMore: filters.offset + items.length < total,
+    nextCursor: null,
+  };
 }
 
 export async function getTaskById(id: number): Promise<Task | null> {

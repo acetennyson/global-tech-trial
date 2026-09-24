@@ -53,6 +53,23 @@ describe("taskFiltersSchema", () => {
 
   it("applies pagination and sort defaults", () => {
     const result = taskFiltersSchema.parse({});
-    expect(result).toMatchObject({ limit: 50, offset: 0, orderBy: "createdAt", asc: false, timeField: "start" });
+    expect(result).toMatchObject({
+      limit: 50,
+      offset: 0,
+      sort: [{ field: "createdAt", asc: false }],
+      timeField: "start",
+    });
+  });
+
+  it("parses a multi-column `sort` with `-` for descending", () => {
+    const result = taskFiltersSchema.parse({ sort: "status,-startTime" });
+    expect(result.sort).toEqual([
+      { field: "status", asc: true },
+      { field: "startTime", asc: false },
+    ]);
+  });
+
+  it("rejects an unknown sort field", () => {
+    expect(() => taskFiltersSchema.parse({ sort: "notAField" })).toThrow(/Unknown sort field/);
   });
 });
