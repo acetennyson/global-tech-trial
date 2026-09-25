@@ -96,16 +96,7 @@ export interface SortField {
 
 const DEFAULT_SORT: SortField[] = [{ field: "createdAt", asc: false }];
 
-/**
- * Parses the `sort` query parameter: a comma-separated list of field names,
- * for example `sort=status,-startTime`. Each field sorts ascending by
- * default; a leading `-` makes it descending, and a leading `+` explicitly
- * marks it ascending (allowed for symmetry, though it's the default anyway).
- * Listing more than one field means later fields break ties between rows
- * that are equal on the earlier ones: `sort=status,-startTime` groups tasks
- * by status first, and within each status, orders them by startTime,
- * newest first.
- */
+// "-field" = desc, "+field"/"field" = asc, comma = tiebreak order
 const sortSchema = z.string().transform((value, ctx) => {
   const specs: SortField[] = [];
   for (const raw of splitCsv(value)) {
@@ -140,19 +131,12 @@ export const taskFiltersSchema = z.object({
   sort: sortSchema.default(DEFAULT_SORT),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
-  /**
-   * The id of the last task the client saw, for keyset pagination. When
-   * this is set, the repository ignores `offset` and returns the next
-   * batch of tasks with an id greater than this one instead. See the
-   * "Choosing between offset and cursor" section of the README for why
-   * these two are alternatives rather than something you'd combine.
-   */
-  cursor: positiveInt.optional(),
+  cursor: positiveInt.optional(), // wins over offset, see repository.ts
 });
 
 export type TaskFiltersInput = z.infer<typeof taskFiltersSchema>;
 
-/** Parses `?a=b&c=d` search params into the shape `taskFiltersSchema` expects (only defined keys are passed through). */
+// URLSearchParams -> plain object, taskFiltersSchema's input shape
 export function searchParamsToObject(searchParams: URLSearchParams): Record<string, string> {
   const result: Record<string, string> = {};
   for (const key of searchParams.keys()) {

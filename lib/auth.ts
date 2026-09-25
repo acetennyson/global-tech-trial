@@ -1,15 +1,4 @@
-/**
- * Auth resolution for API routes.
- *
- * This project has no session or JWT provider wired up yet, so the
- * "signed-in user" is resolved from request headers instead: the headers a
- * real auth layer (NextAuth, a JWT middleware, a gateway) would normally set
- * after verifying a token. Every caller in this codebase already treats
- * `resolveAuthUser` as the single source of truth for "who is making this
- * request", and never trusts a client-supplied `createdBy`, so swapping in
- * real token verification later only means changing the body of this one
- * function.
- */
+// headers stand in for a real session/JWT. swap the body of resolveAuthUser later, callers don't change.
 
 export interface AuthUser {
   id: string;

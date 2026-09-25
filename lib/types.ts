@@ -1,30 +1,30 @@
 export const TASK_STATUSES = ["todo", "inProgress", "done"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
-/** A task as returned by the API (camelCase, JSON-friendly). */
+/** API shape. camelCase. */
 export interface Task {
   id: number;
-  parentId: number | null; // id of the parent task, if this is a subtask
+  parentId: number | null;
   title: string;
   description: string | null;
   status: TaskStatus;
-  visible: boolean; // false = only the creator can see it
-  startTime: string; // ISO 8601, maps to `start_time`
-  endTime: string; // ISO 8601, maps to `end_time`
-  createdById: string; // resolved from auth data, never from client input
+  visible: boolean;
+  startTime: string;
+  endTime: string;
+  createdById: string;
   createdByName: string | null;
-  createdAt: string; // ISO 8601
-  updatedAt: string; // ISO 8601
+  createdAt: string;
+  updatedAt: string;
 }
 
-/** Raw shape returned by mysql2 (snake_case columns). */
+/** mysql2 shape. snake_case. */
 export interface TaskRow {
   id: number;
   parent_id: number | null;
   title: string;
   description: string | null;
   status: TaskStatus;
-  visible: number; // MySQL TINYINT(1)
+  visible: number;
   start_time: Date | string;
   end_time: Date | string;
   created_by_id: string;
@@ -33,7 +33,7 @@ export interface TaskRow {
   updated_at: Date | string;
 }
 
-/** Fields a client may submit when creating a task. `createdBy*` is never accepted from the body. */
+/** No createdBy* here on purpose. */
 export interface CreateTaskInput {
   parentId?: number | null;
   title: string;
@@ -44,5 +44,4 @@ export interface CreateTaskInput {
   endTime: string;
 }
 
-/** Fields a client may submit when updating a task. Everything is optional. */
 export type UpdateTaskInput = Partial<CreateTaskInput>;

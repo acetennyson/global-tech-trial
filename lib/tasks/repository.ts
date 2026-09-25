@@ -16,7 +16,7 @@ const TABLE = "tasks";
 
 type TaskRowPacket = TaskRow & RowDataPacket;
 
-/** Converts a database row (snake_case columns) into the API's task shape (camelCase fields). This is the one place in the codebase that knows the column mapping, so it's also the only place that needs to change if a column is ever renamed. */
+// snake_case -> camelCase. only place that knows it.
 export function rowToTask(row: TaskRow): Task {
   return {
     id: row.id,
@@ -70,7 +70,7 @@ const SORT_FIELD_TO_COLUMN: Record<SortableField, string> = {
   updatedAt: "updated_at",
 };
 
-/** Translates parsed query filters into a query-builder `Condition`. */
+// filters -> Condition
 export function filtersToCondition(filters: TaskFiltersInput): Condition {
   const condition: Condition = {};
 
@@ -94,11 +94,7 @@ export function filtersToCondition(filters: TaskFiltersInput): Condition {
   }
 
   if (filters.cursor !== undefined) {
-    // Keyset pagination: instead of skipping rows with OFFSET, ask directly
-    // for rows with id greater than the last one the client saw. This is a
-    // single indexed lookup, so it costs the same whether it's page 1 or
-    // page 100,000. See the "Scaling to 1 million users" section of the
-    // README for the full comparison against offset-based pagination.
+    // keyset, not offset. see README.
     condition.__GREATER = { ...condition.__GREATER, id: filters.cursor };
     condition.__ORDERBY = [{ column: "id", asc: true }];
     condition.__LIMIT = filters.limit;
@@ -114,21 +110,12 @@ export function filtersToCondition(filters: TaskFiltersInput): Condition {
 export interface TaskPage {
   items: Task[];
   limit: number;
-  /** The offset that was applied. `null` when this page was fetched with `cursor` instead. */
-  offset: number | null;
-  /** The 1-based page number this response represents. `null` in cursor mode. */
-  page: number | null;
-  /** How many pages of this size exist in total. `null` in cursor mode. */
-  totalPages: number | null;
-  /**
-   * The total number of matching rows across all pages. `null` in cursor
-   * mode, because computing it would require the same expensive COUNT(*)
-   * that cursor pagination exists to avoid. See the README for details.
-   */
-  total: number | null;
+  offset: number | null; // null in cursor mode
+  page: number | null; // null in cursor mode
+  totalPages: number | null; // null in cursor mode
+  total: number | null; // null in cursor mode, no free COUNT(*)
   hasMore: boolean;
-  /** In cursor mode, the value to pass as the next request's `cursor`. `null` in offset mode, and `null` here too once there are no more pages. */
-  nextCursor: number | null;
+  nextCursor: number | null; // set only in cursor mode
 }
 
 export async function listTasks(filters: TaskFiltersInput): Promise<TaskPage> {

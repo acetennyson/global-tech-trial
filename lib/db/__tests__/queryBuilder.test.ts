@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildCountQuery,
   buildDeleteAllQuery,
   buildDeleteQuery,
   buildInsertQuery,
@@ -56,6 +57,25 @@ describe("buildSelectQuery", () => {
   it("rejects identifiers that aren't safe SQL names", () => {
     expect(() => buildSelectQuery("tasks; DROP TABLE tasks", "*", {})).toThrow(/Unsafe SQL identifier/);
     expect(() => buildSelectQuery("tasks", "*", { "id = 1 OR 1=1": "x" })).toThrow(/Unsafe SQL identifier/);
+  });
+});
+
+describe("buildCountQuery", () => {
+  it("builds a COUNT(*) query, filters applying but no ORDER BY/LIMIT/OFFSET", () => {
+    const { sql, params } = buildCountQuery("tasks", {
+      status: "todo",
+      __ORDERBY: "start_time",
+      __LIMIT: 10,
+      __OFFSET: 20,
+    });
+    expect(sql).toBe("SELECT COUNT(*) AS count FROM tasks WHERE status = ?");
+    expect(params).toEqual(["todo"]);
+  });
+
+  it("works with no condition at all", () => {
+    const { sql, params } = buildCountQuery("tasks");
+    expect(sql).toBe("SELECT COUNT(*) AS count FROM tasks");
+    expect(params).toEqual([]);
   });
 });
 

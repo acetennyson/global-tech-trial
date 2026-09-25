@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TaskRow } from "@/lib/types";
 import { taskFiltersSchema } from "@/lib/validation/task";
+import { buildCountQuery, buildSelectQuery } from "@/lib/db/queryBuilder";
 
 vi.mock("@/lib/db/advanceSQL", () => ({
   advanceSelect: vi.fn(),
@@ -120,6 +121,27 @@ describe("filtersToCondition", () => {
     const filters = taskFiltersSchema.parse({ cursor: "100", from: "2026-01-01T00:00:00Z" });
     const condition = filtersToCondition(filters);
     expect(condition.__GREATER).toEqual({ start_time: "2026-01-01T00:00:00Z", id: 100 });
+  });
+
+  // Regression test for the bug fixed on 2026-09-25: advanceCount used to build its
+  // COUNT(*) query through buildSelectQuery, whose column-list check rejected
+  // "COUNT(*) AS count" as an unsafe identifier, throwing on every offset-mode
+  // GET /api/tasks request. This runs the real (unmocked) query builders, not just
+  // advanceSQL's mocked stand-ins, so a regression here would fail loudly again.
+  it("produces valid SELECT and COUNT SQL for a real query string, end to end", () => {
+    const filters = taskFiltersSchema.parse({
+      status: "todo",
+      from: "2026-01-01T00:00:00Z",
+      sort: "-startTime",
+    });
+    const condition = filtersToCondition(filters);
+
+    expect(() => buildSelectQuery("tasks", "*", condition)).not.toThrow();
+    expect(() => buildCountQuery("tasks", condition)).not.toThrow();
+
+    const { sql: countSql, params: countParams } = buildCountQuery("tasks", condition);
+    expect(countSql).toBe("SELECT COUNT(*) AS count FROM tasks WHERE start_time >= ? AND status IN (?)");
+    expect(countParams).toEqual(["2026-01-01T00:00:00Z", "todo"]);
   });
 });
 

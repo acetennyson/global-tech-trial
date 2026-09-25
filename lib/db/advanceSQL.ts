@@ -1,6 +1,7 @@
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { getPool } from "./pool";
 import {
+  buildCountQuery,
   buildDeleteAllQuery,
   buildDeleteQuery,
   buildInsertQuery,
@@ -11,15 +12,7 @@ import {
 
 type Executor = Pool | PoolConnection;
 
-/**
- * Table-agnostic CRUD helpers. This is a TypeScript port of the
- * advanceSelect/advanceInsert/advanceUpdate/advanceDelete toolkit from
- * elementTouch/server/advanceSQL.php: a small, reusable data-access layer
- * that any route or module can call for any table, without writing raw SQL
- * itself. The one intentional difference from the PHP original is that
- * every value here is bound as a `?` placeholder and passed to `mysql2`
- * separately, instead of being written directly into the SQL string.
- */
+// TS port of advanceSQL.php. Same names, bound params instead of interpolation.
 
 export async function advanceSelect<T extends RowDataPacket = RowDataPacket>(
   table: string,
@@ -42,7 +35,7 @@ export async function advanceCount(
   delete countCondition.__ASC;
   delete countCondition.__LIMIT;
   delete countCondition.__OFFSET;
-  const { sql, params } = buildSelectQuery(table, ["COUNT(*) AS count"], countCondition);
+  const { sql, params } = buildCountQuery(table, countCondition);
   const [rows] = await conn.query<RowDataPacket[]>(sql, params);
   return Number(rows[0]?.count ?? 0);
 }
@@ -78,12 +71,7 @@ export async function advanceDelete(
   return result.affectedRows;
 }
 
-/**
- * Deletes every row in `table`. Kept as its own function, separate from
- * `advanceDelete`, so that an empty or missing condition can never be
- * mistaken for "delete everything." See `buildDeleteAllQuery` for the query
- * this runs.
- */
+/** the `{all:true}` path. */
 export async function advanceDeleteAll(table: string, conn: Executor = getPool()): Promise<number> {
   const { sql, params } = buildDeleteAllQuery(table);
   const [result] = await conn.query<ResultSetHeader>(sql, params);
