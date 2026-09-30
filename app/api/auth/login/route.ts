@@ -1,10 +1,11 @@
+import { withRequestLogging } from "@/lib/observability";
 import { fail, ok, toErrorResponse } from "@/lib/http";
 import { loginSchema } from "@/lib/validation/auth";
 import { verifyPassword } from "@/lib/auth/password";
 import { signToken } from "@/lib/auth/jwt";
 import { findUserByEmail } from "@/lib/users/repository";
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   try {
     const body = await request.json();
     const { email, password } = loginSchema.parse(body);
@@ -27,3 +28,5 @@ export async function POST(request: Request) {
 // A real bcrypt hash of an unguessable placeholder, purely so the timing of
 // "no such user" matches "wrong password" (see comment above).
 const DUMMY_HASH = "$2a$12$CwTycUXWue0Thq9StjUM0uJ8w5R.d1B9r5g/PkGoK.Rw9E1yz.iOG";
+
+export const POST = withRequestLogging(handlePOST);

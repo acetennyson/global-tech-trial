@@ -1,3 +1,4 @@
+import { withRequestLogging } from "@/lib/observability";
 import { resolveAuthUser } from "@/lib/auth";
 import { fail, ok, toErrorResponse } from "@/lib/http";
 import { getTaskById, softDeleteTaskById, updateTaskWithVersion } from "@/lib/tasks/repository";
@@ -12,7 +13,7 @@ type Params = { params: Promise<{ id: string }> };
 
 // view one. a task not visible to the caller (not theirs, and not `visible`)
 // 404s the same as a task that doesn't exist — existence isn't leaked either way.
-export async function GET(request: Request, { params }: Params) {
+async function handleGET(request: Request, { params }: Params) {
   try {
     const user = resolveAuthUser(request);
     const id = parseId((await params).id);
@@ -31,7 +32,7 @@ export async function GET(request: Request, { params }: Params) {
 // update one. requires the version the client last saw; a mismatch means
 // someone else changed it first and comes back as 409, not a silent overwrite.
 // Only the task's creator may edit it.
-export async function PATCH(request: Request, { params }: Params) {
+async function handlePATCH(request: Request, { params }: Params) {
   try {
     const user = resolveAuthUser(request);
     const id = parseId((await params).id);
@@ -60,7 +61,7 @@ export async function PATCH(request: Request, { params }: Params) {
 
 // delete one — a tombstone (`deleted_at`), not a row removal. Only the task's
 // creator may delete it.
-export async function DELETE(request: Request, { params }: Params) {
+async function handleDELETE(request: Request, { params }: Params) {
   try {
     const user = resolveAuthUser(request);
     const id = parseId((await params).id);
@@ -81,3 +82,7 @@ export async function DELETE(request: Request, { params }: Params) {
     return toErrorResponse(error);
   }
 }
+
+export const GET = withRequestLogging(handleGET);
+export const PATCH = withRequestLogging(handlePATCH);
+export const DELETE = withRequestLogging(handleDELETE);

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { ForbiddenError, UnauthenticatedError } from "./auth";
+import { logger } from "./logger";
 
 // Result()/Error() from functions.php, JSON-ified.
 
@@ -26,6 +27,6 @@ export function toErrorResponse(error: unknown) {
   if (error instanceof SyntaxError) {
     return fail(400, "Malformed JSON body");
   }
-  console.error(error);
+  logger.error("unhandled error", { err: error });
   return fail(500, "Internal server error");
 }

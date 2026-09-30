@@ -58,9 +58,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      # Deploys over SSH to a Docker host. Swap this step out if you deploy elsewhere.
-      # Secrets: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, GHCR_PULL_TOKEN (read:packages PAT).
-      # The server needs /opt/taskmanager/.env with DATABASE_URL, JWT_SECRET, etc.
+      # SSH deploy to a server with Docker. Replace this step if you host elsewhere.
+      # Secrets: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, GHCR_PULL_TOKEN.
+      # The server needs /opt/taskmanager/.env (DATABASE_URL, JWT_SECRET, ...).
       - uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DEPLOY_HOST }}
