@@ -14,13 +14,8 @@ export interface SyncBatchResult {
   rejected: { operationId: string; error: string; permanent: boolean }[];
 }
 
-// Applies operations one at a time, in the order they arrived. Not parallelized:
-// two operations in the same batch can legitimately target the same task (e.g.
-// an offline client's own create-then-update-then-delete queued together), and
-// applying them out of order would corrupt that task's history. Cross-task
-// operations paying a small serialization cost is an acceptable trade for that
-// correctness guarantee at this stage — see the handoff's exit criteria, which
-// asks for correctness under retries/concurrency, not batch throughput.
+// Applies operations one at a time, in arrival order. Example: a phone queues create,
+// update, delete on the same task. Running them in parallel could apply the delete first.
 export async function applySyncBatch(operations: SyncOperationInput[], user: AuthUser): Promise<SyncBatchResult> {
   const result: SyncBatchResult = { accepted: [], conflicts: [], rejected: [] };
 
@@ -53,8 +48,7 @@ export async function applySyncBatch(operations: SyncOperationInput[], user: Aut
         result.rejected.push({ operationId: op.id, error: error.message, permanent: true });
         continue;
       }
-      // Anything unexpected (DB error, etc.) is treated as transient — the
-      // client's backoff will retry it, per spec: "server unavailable -> retry".
+      // anything unexpected (DB error, etc.) is treated as temporary, so the client retries
       result.rejected.push({
         operationId: op.id,
         error: error instanceof Error ? error.message : "Unknown error applying operation",
@@ -79,12 +73,11 @@ function applyOutcome(
       result.conflicts.push({ operationId, current: outcome.current! });
       return;
     case "forbidden":
-      // Authorization won't change on retry — permanent, same as an auth/validation error.
+      // retrying won't change who owns the task
       result.rejected.push({ operationId, error: "Not allowed to modify this task", permanent: true });
       return;
     case "not_found":
-      // A task deleted (tombstoned) or never synced from another device. Not
-      // retriable as-is; the client surfaces this rather than looping forever.
+      // deleted, or never synced. Retrying won't help, so the client should surface it.
       result.rejected.push({ operationId, error: "Task not found", permanent: true });
       return;
   }

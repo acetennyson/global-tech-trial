@@ -5,10 +5,8 @@ import { applySyncBatch } from "@/lib/sync/service";
 import { listEventsSince } from "@/lib/sync/eventsRepository";
 import { syncBatchSchema, syncPullQuerySchema } from "@/lib/sync/validation";
 
-// Push: apply a batch of offline-originated operations. Every operation carries
-// its own id, reused as the idempotency key for that specific mutation — a
-// resent batch (client never saw the response) re-applies nothing, it just
-// replays the same accepted/conflict/rejected outcome per operation.
+// Push: apply a batch of offline operations. Each operation's id is its idempotency key,
+// so resending a batch (response lost) re-applies nothing and returns the same outcomes.
 async function handlePOST(request: Request) {
   try {
     const user = resolveAuthUser(request);
@@ -21,9 +19,8 @@ async function handlePOST(request: Request) {
   }
 }
 
-// Pull: durable catch-up since a cursor, built off task_events (Module 1) rather
-// than the tasks table directly — that's what lets a deleted task still show up
-// to a client that only has the old, non-tombstoned copy.
+// Pull: changes since a cursor, read from task_events. That is how a deleted task
+// still reaches a client that only has the old copy.
 async function handleGET(request: Request) {
   try {
     const user = resolveAuthUser(request);

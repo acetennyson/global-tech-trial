@@ -4,7 +4,7 @@ import { ForbiddenError, UnauthenticatedError } from "./auth";
 import { IdempotencyKeyReuseError } from "./idempotency";
 import { logger } from "./logger";
 
-// Result()/Error() from functions.php, JSON-ified.
+// JSON response helpers
 
 export function ok<T>(data: T, status = 200) {
   return NextResponse.json({ data }, { status });

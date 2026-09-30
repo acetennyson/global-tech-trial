@@ -25,8 +25,7 @@ async function handlePOST(request: Request) {
   }
 }
 
-// A real bcrypt hash of an unguessable placeholder, purely so the timing of
-// "no such user" matches "wrong password" (see comment above).
+// Dummy bcrypt hash, so "no such user" takes as long as "wrong password".
 const DUMMY_HASH = "$2a$12$CwTycUXWue0Thq9StjUM0uJ8w5R.d1B9r5g/PkGoK.Rw9E1yz.iOG";
 
 export const POST = withRequestLogging(handlePOST);

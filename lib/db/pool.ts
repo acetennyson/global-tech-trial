@@ -17,8 +17,7 @@ export function getPool(): Pool {
     global.__pgPool = new Pool({
       connectionString,
       max: Number(process.env.DB_CONNECTION_LIMIT ?? 10),
-      // Supabase connections are TLS; rejectUnauthorized defaults to true unless
-      // explicitly disabled (self-signed/pooler cert chains commonly need this off).
+      // Supabase uses TLS. Its pooler cert chain often needs rejectUnauthorized off.
       ssl: { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== "false" },
     });
   }

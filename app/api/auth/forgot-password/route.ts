@@ -17,6 +17,7 @@ async function handlePOST(request: Request) {
     const user = await findUserByEmail(email);
     if (user) {
       // they get the same generic message either way.
+      // Failures here are logged, not returned. If SMTP is down, a registered email
       try {
         const { token, tokenHash, expiresAt } = generateResetToken();
         await createPasswordResetToken(user.id, tokenHash, expiresAt);

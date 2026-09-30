@@ -4,8 +4,7 @@ import { ok, toErrorResponse } from "@/lib/http";
 import { createTaskIdempotent, listTasks, softDeleteAllTasks, softDeleteTasksByIds, updateTasksByIds } from "@/lib/tasks/repository";
 import { bulkDeleteSchema, bulkUpdateSchema, createTaskSchema, searchParamsToObject, taskFiltersSchema } from "@/lib/validation/task";
 
-// list + filter. scoped to what the caller may see: their own tasks, plus
-// everyone's visible ones.
+// list + filter, limited to the caller's own tasks plus everyone's visible ones
 async function handleGET(request: Request) {
   try {
     const user = resolveAuthUser(request);
@@ -18,8 +17,8 @@ async function handleGET(request: Request) {
   }
 }
 
-// create. creator from the verified JWT, never body. an Idempotency-Key header makes a
-// retried request return the original task instead of creating a duplicate.
+// create. The creator comes from the JWT, never the body. A retry with the same
+// Idempotency-Key returns the original task.
 async function handlePOST(request: Request) {
   try {
     const user = resolveAuthUser(request);
@@ -33,10 +32,8 @@ async function handlePOST(request: Request) {
   }
 }
 
-// bulk patch, one id -> [id]/route.ts instead. Requires auth and only touches tasks
-// the caller created; other ids are skipped. No version check here yet — bulk
-// operations move to an async job (Module 5) rather than gaining per-row
-// optimistic concurrency in this synchronous path.
+// bulk patch (one task: [id]/route.ts). Only touches the caller's tasks, other ids are
+// skipped. No version check.
 async function handlePATCH(request: Request) {
   try {
     const user = resolveAuthUser(request);
@@ -49,9 +46,8 @@ async function handlePATCH(request: Request) {
   }
 }
 
-// ids[] or {all:true}, never both paths at once. Requires auth; both shapes are
-// scoped to the caller's own tasks ({all:true} = all of mine). Still a hard delete — see
-// repository.ts; Module 5 converts this to a tombstoning background job.
+// ids[] or {all:true}, never both. Only the caller's tasks ({all:true} = all of mine).
+// Soft delete, same as single delete.
 async function handleDELETE(request: Request) {
   try {
     const user = resolveAuthUser(request);

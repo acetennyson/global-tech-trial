@@ -1,6 +1,4 @@
--- TM-2: registered users. Kept as its own table rather than folded into the
--- fake-auth header world tasks already reference (created_by_id is TEXT, not a
--- FK, precisely so M1's schema didn't have to know about auth yet).
+-- Registered users. tasks.created_by_id is plain TEXT, not a foreign key to this table.
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
@@ -9,9 +7,8 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Forgot-password flow. Only the token's hash is stored (see lib/auth/resetToken.ts,
--- same reasoning as never storing a plaintext password). One row per issued link;
--- `used_at` makes a link single-use, `expires_at` bounds how long it's live.
+-- Password reset links. Only the token hash is stored (lib/auth/resetToken.ts).
+-- One row per link: `used_at` makes it single-use, `expires_at` limits its lifetime.
 CREATE TABLE IF NOT EXISTS password_reset_tokens (
   id TEXT PRIMARY KEY,
   token_hash TEXT NOT NULL UNIQUE,
@@ -59,8 +56,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_end_time ON tasks (end_time);
 CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks (created_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks (updated_at);
 
--- Auto-bump `updated_at` on every row change, same as MySQL's
--- "ON UPDATE CURRENT_TIMESTAMP" used to. Postgres has no built-in equivalent.
+-- Sets `updated_at` on every row change (Postgres has no ON UPDATE CURRENT_TIMESTAMP).
 CREATE OR REPLACE FUNCTION set_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -92,9 +88,8 @@ CREATE TABLE IF NOT EXISTS task_events (
 CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events (task_id);
 CREATE INDEX IF NOT EXISTS idx_task_events_created_at ON task_events (created_at);
 
--- Dedupe retried writes. A response is stored once per (user, key) and replayed
--- verbatim on every retry with the same key by the same user. Keys are scoped per
--- user so one user can never read back another user's stored response.
+-- Retry cache. The response is stored once per (user, key) and replayed on retries.
+-- Scoped per user, so nobody can read another user's stored response.
 CREATE TABLE IF NOT EXISTS idempotency_keys (
   user_id TEXT NOT NULL,
   key TEXT NOT NULL,
@@ -106,8 +101,7 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
   PRIMARY KEY (user_id, key)
 );
 
--- Upgrade path for databases created before keys were per-user (global PK on key).
--- Rows are a retry cache, so anything that can't be attributed to a user is dropped.
+-- Upgrade for older databases (key was the primary key). Rows that can't be tied to a user are dropped.
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -124,7 +118,6 @@ BEGIN
   END IF;
 END $$;
 
--- Binds a key to the request it was first used with (sha256 of the canonical input),
--- so reusing the key with a different body is rejected. NULL on rows written before
--- this existed; those are accepted as a match.
+-- sha256 of the original request, so reusing a key with a different body is rejected.
+-- NULL on older rows, which are accepted as a match.
 ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS request_hash TEXT;

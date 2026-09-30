@@ -1,4 +1,4 @@
-// no I/O here, just string in, {sql, params} out. advanceSQL.php's builder half.
+// no I/O: a Condition goes in, {sql, params} comes out
 
 export interface BuiltQuery {
   sql: string;
@@ -10,16 +10,14 @@ export interface SortSpec {
   asc?: boolean;
 }
 
-// the __KEY convention, PHP-side.
+// keys starting with __ are modifiers (__IN, __OR, __ORDERBY, ...)
 export interface ConditionModifiers {
   __GREATER?: Record<string, unknown>;
   __LESSER?: Record<string, unknown>;
   __BETWEEN?: Record<string, [unknown, unknown]>;
   __IN?: Record<string, unknown[]>;
   __SEARCH?: { columns: string[]; term: string };
-  // Simple two-or-more-branch OR of plain equality conditions, ANDed with everything
-  // else. Each branch is `{ column: value }` pairs only (no nested modifiers) — enough
-  // for "visible OR own row" style authorization checks without a general query DSL.
+  // OR of plain equality branches, ANDed with the rest. Example: visible OR own row.
   __OR?: Record<string, unknown>[];
   __ORDERBY?: string | SortSpec[];
   __ASC?: boolean;

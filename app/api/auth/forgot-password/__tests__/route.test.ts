@@ -58,10 +58,7 @@ describe("POST /api/auth/forgot-password", () => {
   });
 
   it("returns the exact same 200 response, not a 500, when the email send fails for a real account", async () => {
-    // This is the regression test for the enumeration gap: before the fix, a
-    // downed SMTP server made this path 500 while an unknown email still got
-    // 200 — an attacker could use that status-code difference as an oracle for
-    // which emails are registered.
+    // Regression: a 500 here (vs 200 for unknown emails) would reveal registered emails.
     vi.mocked(usersRepo.findUserByEmail).mockResolvedValue(EXISTING_USER);
     vi.mocked(usersRepo.createPasswordResetToken).mockResolvedValue(undefined);
     vi.mocked(email.sendPasswordResetEmail).mockRejectedValue(new Error("smtp connection refused"));

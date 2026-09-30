@@ -40,7 +40,7 @@ export interface TaskRow {
 
 /** No createdBy* here on purpose. */
 export interface CreateTaskInput {
-  /** client-supplied stable id for offline-created tasks; server generates one if omitted. */
+  /** supplied by offline clients; the server generates one if omitted */
   id?: string;
   parentId?: string | null;
   title: string;

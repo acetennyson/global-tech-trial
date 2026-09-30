@@ -1,12 +1,7 @@
 import jwt from "jsonwebtoken";
 
-// Deliberately using jsonwebtoken's synchronous sign/verify (HS256, a shared
-// secret) rather than Supabase Auth's async JWT verification the handoff doc
-// originally pointed at. That choice is what lets resolveAuthUser in
-// lib/auth/index.ts stay synchronous — see the comment there: an async verification
-// step would have forced every call site (every route handler) to add `await`.
-// If this is ever swapped for Supabase Auth or another async verifier, that
-// comment's claim stops being true and every caller needs updating.
+// jsonwebtoken's synchronous sign/verify (HS256, shared secret), not Supabase Auth.
+// That keeps resolveAuthUser in lib/auth/index.ts synchronous.
 
 export interface JwtPayload {
   sub: string; // user id

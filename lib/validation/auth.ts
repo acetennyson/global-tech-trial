@@ -2,9 +2,8 @@ import { z } from "zod";
 
 export const registerSchema = z.object({
   email: z.string().trim().toLowerCase().email("Must be a valid email address"),
-  // Length only, deliberately: composition rules ("must contain a symbol")
-  // push people toward predictable substitutions and don't meaningfully raise
-  // resistance to offline cracking the way bcrypt's cost factor already does.
+  // Length only: "must contain a symbol" rules lead to predictable passwords, and
+  // bcrypt's cost factor already slows cracking.
   password: z.string().min(8, "Password must be at least 8 characters"),
   name: z.string().trim().min(1).max(255).optional(),
 });
@@ -20,6 +19,6 @@ export const forgotPasswordSchema = z.object({
 
 export const resetPasswordSchema = z.object({
   token: z.string().trim().min(1, "token is required"),
-  // same length-only rule as registerSchema.password, deliberately kept in sync
+  // same rule as registerSchema.password
   password: z.string().min(8, "Password must be at least 8 characters"),
 });
