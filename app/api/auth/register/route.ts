@@ -14,6 +14,7 @@ async function handlePOST(request: Request) {
     const result = await createUser({ email, passwordHash, name: name ?? null });
 
     if (result.status === "email_taken") {
+      // a clear "already registered" is fine here: unlike login, nothing is gained by hiding it
       return fail(409, "An account with this email already exists");
     }
 

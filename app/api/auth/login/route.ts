@@ -11,6 +11,9 @@ async function handlePOST(request: Request) {
     const { email, password } = loginSchema.parse(body);
 
     const user = await findUserByEmail(email);
+    // Same message for an unknown email and a wrong password. The bcrypt compare
+    // always runs (against a dummy hash if there's no user), so response time
+    // doesn't reveal which emails exist.
     const passwordHash = user?.passwordHash ?? DUMMY_HASH;
     const validPassword = await verifyPassword(password, passwordHash);
 

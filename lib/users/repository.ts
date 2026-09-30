@@ -44,9 +44,8 @@ export async function findUserById(id: string): Promise<User | null> {
 
 export type CreateUserResult = { status: "ok"; user: User } | { status: "email_taken" };
 
-// Relies on the `users.email` UNIQUE constraint to make the check-then-insert
-// race-free: a prior findUserByEmail in the route handler is just a fast path
-// for a friendly error message, not the actual guarantee against duplicates.
+// The UNIQUE constraint on `users.email` is what prevents duplicates. The earlier
+// findUserByEmail check in the route only gives a friendlier error.
 export async function createUser(input: { email: string; passwordHash: string; name: string | null }): Promise<CreateUserResult> {
   const id = generateId();
   try {
@@ -107,6 +106,8 @@ export async function markPasswordResetTokenUsed(tokenHash: string): Promise<voi
   await advanceUpdate("password_reset_tokens", { used_at: new Date().toISOString() }, { token_hash: tokenHash });
 }
 
+// Kills every other unused reset link for this user. Example: they requested two
+// emails, used the second, and the first must stop working.
 export async function invalidateOtherPasswordResetTokens(userId: string, exceptTokenHash: string): Promise<void> {
   const activeTokens = await advanceSelect<PasswordResetTokenRow>("password_reset_tokens", ["token_hash"], {
     user_id: userId,

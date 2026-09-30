@@ -4,6 +4,7 @@ import { advanceCount, advanceInsert, advanceSelect, advanceUpdate, advanceDelet
 import type { Condition } from "@/lib/db/queryBuilder";
 import { generateId } from "@/lib/db/id";
 import type { AuthUser } from "@/lib/auth";
+import { assertSameRequest, hashRequest } from "@/lib/idempotency";
 import type { CreateTaskInput, Task, TaskRow, UpdateTaskInput } from "@/lib/types";
 import type { SortableField, TaskFiltersInput } from "@/lib/validation/task";
 
@@ -78,8 +79,7 @@ const SORT_FIELD_TO_COLUMN: Record<SortableField, string> = {
 export function filtersToCondition(filters: TaskFiltersInput, viewerId?: string): Condition {
   const condition: Condition = {};
 
-  // Tombstoned tasks never show up on the normal read path. Sync (Module 4) reads
-  // task_events directly, which is how a deleted task still propagates to clients.
+  // Deleted tasks are hidden here. Sync reads task_events, so deletes still reach clients.
   condition.deleted_at = null;
 
   if (viewerId) {
@@ -106,8 +106,7 @@ export function filtersToCondition(filters: TaskFiltersInput, viewerId?: string)
   }
 
   if (filters.cursor !== undefined) {
-    // keyset, not offset. ULIDs sort lexicographically by creation time, so a
-    // plain string comparison on id still gives the right order. see README.
+    // keyset, not offset: ULIDs sort by creation time, so `id > cursor` works. See README.
     condition.__GREATER = { ...condition.__GREATER, id: filters.cursor };
     condition.__ORDERBY = [{ column: "id", asc: true }];
     condition.__LIMIT = filters.limit;
@@ -162,13 +161,14 @@ export async function listTasks(filters: TaskFiltersInput, viewerId?: string): P
   };
 }
 
-// Tombstoned tasks 404 here, same as a task that never existed — a client has no
-// way to tell the two apart through this call, by design.
+// Deleted tasks come back null, same as ones that never existed.
 export async function getTaskById(id: string): Promise<Task | null> {
   const rows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id, deleted_at: null });
   return rows[0] ? rowToTask(rows[0]) : null;
 }
 
+// Same visibility rule as listTasks, for one row. A hidden task returns null, so the
+// route 404s and never reveals that it exists.
 export async function getVisibleTaskById(id: string, viewerId: string): Promise<Task | null> {
   const task = await getTaskById(id);
   if (!task) return null;
@@ -176,8 +176,7 @@ export async function getVisibleTaskById(id: string, viewerId: string): Promise<
   return task;
 }
 
-// --- transactions: every write below pairs a `tasks` mutation with a
-// `task_events` row, committed or rolled back together. ---
+// Every write below saves the task change and its `task_events` row in one transaction.
 
 async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await getPool().connect();
@@ -231,15 +230,14 @@ export interface IdempotentCreateResult {
   replayed: boolean;
 }
 
-// POST /api/tasks with an Idempotency-Key: the first request with a given key
-// creates the task and stores its response; every later request with the same
-// key gets that stored response back, verbatim, and creates nothing.
+// POST with an Idempotency-Key: the first request creates the task and stores the
+// response. Retries with the same key get that response back and create nothing.
+// Keys are per user: (user_id, key). Reusing a key with a different body throws
+// IdempotencyKeyReuseError (422).
 //
-// Known gap: two requests with the same brand-new key, at the exact same time,
-// can both pass the "not seen yet" check before either commits — the second
-// commit then fails on the idempotency_keys primary key. Left as a rare-edge-case
-// 500 rather than added retry complexity here; a client-side retry on that key
-// succeeds via the now-stored row.
+// Known gap: two simultaneous requests with the same new key can both pass the
+// lookup. The second then fails on the primary key and returns a 500 (nothing is
+// duplicated). Retrying the same key returns the stored task.
 export async function createTaskIdempotent(
   input: CreateTaskInput,
   user: AuthUser,
@@ -292,16 +290,9 @@ export type WriteOutcome =
   | { status: "forbidden" }
   | { status: "conflict"; current: Task };
 
-// --- generic idempotent-outcome cache, reusing idempotency_keys beyond create ---
-//
-// createTaskIdempotent above only covers POST. A retried PATCH/DELETE with the
-// same version can't be made safe the same way version-checking already makes
-// it *correct* (a real resend after the first one committed will now see a
-// version that has moved on, and come back "conflict" instead of replaying the
-// original success) — which is exactly the retry pattern Module 4's sync
-// protocol produces. These two helpers let any write outcome be cached and
-// replayed by an idempotency key (the sync operation id), independent of
-// createTaskIdempotent's create-specific path.
+// Same idempotency table, for updates and deletes. Example: a sync client resends an
+// update after losing the response. The version has already moved on, so a plain
+// retry would say "conflict". With the key, it gets the original success back.
 
 export async function getCachedOutcome(userId: string, idempotencyKey: string): Promise<WriteOutcome | null> {
   const rows = await advanceSelect<{ response: WriteOutcome } & QueryResultRow>(
@@ -335,9 +326,8 @@ async function cacheOutcome(
   );
 }
 
-// PATCH /api/tasks/:id. Rejects with "conflict" if `expectedVersion` doesn't
-// match what's in the DB right now — someone else changed it first — rather than
-// silently overwriting their change.
+// PATCH /api/tasks/:id. Returns "conflict" if `expectedVersion` is stale, so a second
+// editor never overwrites the first.
 export async function updateTaskWithVersion(
   id: string,
   expectedVersion: number,
@@ -353,8 +343,7 @@ export async function updateTaskWithVersion(
 
     const row = updateInputToRow(input);
     row.version = current.version + 1;
-    // WHERE id AND version, belt-and-braces against a write racing in between
-    // the read above and this update.
+    // also match on version, in case a write lands between the read and this update
     await advanceUpdate(TABLE, row, { id, version: expectedVersion }, client);
 
     const updatedRows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id }, client);
@@ -365,9 +354,8 @@ export async function updateTaskWithVersion(
   });
 }
 
-// DELETE /api/tasks/:id. Sets `deleted_at` instead of removing the row — the
-// tombstone is what lets an offline client (Module 3/4) find out a task it has
-// locally was deleted elsewhere.
+// DELETE /api/tasks/:id. Sets `deleted_at` instead of removing the row, so offline
+// clients can learn the task was deleted.
 export async function softDeleteTaskById(id: string, actor: AuthUser): Promise<WriteOutcome> {
   return withTransaction(async (client) => {
     const rows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id, deleted_at: null }, client);
@@ -390,10 +378,7 @@ export async function softDeleteTaskById(id: string, actor: AuthUser): Promise<W
   });
 }
 
-// Version-checked delete, for callers (Module 4's sync protocol) that need the
-// same "someone else touched this since I last saw it" detection on delete that
-// updateTaskWithVersion gives PATCH. The plain DELETE /api/tasks/:id route keeps
-// using softDeleteTaskById above — this is additive, not a replacement.
+// Delete with a version check, used by sync. DELETE /api/tasks/:id uses softDeleteTaskById.
 export async function softDeleteTaskWithVersion(
   id: string,
   expectedVersion: number,
@@ -421,10 +406,8 @@ export async function softDeleteTaskWithVersion(
   });
 }
 
-// Idempotency-key-aware wrappers around the two versioned writes above, for
-// Module 4: a resent sync operation with the same id replays the original
-// outcome (including a cached "conflict") instead of re-evaluating the version
-// check against state that has since moved on.
+// The two versioned writes above, plus an idempotency key. A resent sync operation
+// gets its original outcome back, even if that outcome was a conflict.
 export async function updateTaskWithVersionIdempotent(
   id: string,
   expectedVersion: number,
@@ -519,11 +502,8 @@ export async function softDeleteTaskWithVersionIdempotent(
   });
 }
 
-// --- bulk paths: authenticated and owner-scoped. Every statement is constrained to
-// rows the caller created (and that aren't tombstoned), so ids belonging to other
-// users are silently skipped rather than touched. Still hard-delete / non-versioned
-// for now; converting these to tombstone + batched background jobs is Module 5's
-// scope (large-delete safety, job queue). ---
+// Bulk writes only touch live tasks the caller created. Other people's ids are skipped.
+// Bulk update has no version check. For very large sets these should become background jobs.
 
 export async function updateTasksByIds(ids: string[], input: UpdateTaskInput, userId: string): Promise<number> {
   const row = updateInputToRow(input);
@@ -531,12 +511,51 @@ export async function updateTasksByIds(ids: string[], input: UpdateTaskInput, us
   return advanceUpdate(TABLE, row, { __IN: { id: ids }, created_by_id: userId, deleted_at: null });
 }
 
-export async function deleteTasksByIds(ids: string[], userId: string): Promise<number> {
+// Tombstones the caller's tasks and writes one `task.deleted` event each, in one
+// transaction. Same as single delete, so a phone that syncs later hears about it.
+async function softDeleteOwned(userId: string, onlyIds?: string[]): Promise<number> {
+  return withTransaction(async (client) => {
+    const params: unknown[] = [userId];
+    let idFilter = "";
+    if (onlyIds) {
+      params.push(onlyIds);
+      idFilter = " AND id = ANY($2::text[])";
+    }
+    const result = await client.query<TaskRowPacket>(
+      `UPDATE ${TABLE}
+          SET deleted_at = NOW(), version = version + 1
+        WHERE created_by_id = $1 AND deleted_at IS NULL${idFilter}
+        RETURNING *`,
+      params
+    );
+    for (const row of result.rows) {
+      const task = rowToTask(row);
+      await writeTaskEvent(client, task.id, userId, "task.deleted", task);
+    }
+    return result.rows.length;
+  });
+}
+
+export async function softDeleteTasksByIds(ids: string[], userId: string): Promise<number> {
   if (ids.length === 0) return 0;
-  return advanceDelete(TABLE, { __IN: { id: ids }, created_by_id: userId });
+  return softDeleteOwned(userId, ids);
 }
 
 // `{ all: true }` means "all of MY tasks", never the whole table.
-export async function deleteAllTasks(userId: string): Promise<number> {
-  return advanceDelete(TABLE, { created_by_id: userId });
+export async function softDeleteAllTasks(userId: string): Promise<number> {
+  return softDeleteOwned(userId);
+}
+
+// Permanently removes tombstones older than `olderThanSeconds` (run via lib/db/purge.ts).
+// A device offline longer than that must do a full resync. `task_events` is kept.
+// A tombstone that still has child tasks waits until they are purged too (parent_id FK).
+export async function purgeDeletedTasks(olderThanSeconds: number): Promise<number> {
+  const result = await getPool().query(
+    `DELETE FROM ${TABLE} t
+      WHERE t.deleted_at IS NOT NULL
+        AND t.deleted_at < NOW() - make_interval(secs => $1)
+        AND NOT EXISTS (SELECT 1 FROM ${TABLE} c WHERE c.parent_id = t.id)`,
+    [olderThanSeconds]
+  );
+  return result.rowCount ?? 0;
 }

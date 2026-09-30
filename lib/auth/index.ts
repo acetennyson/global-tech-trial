@@ -1,3 +1,6 @@
+// resolveAuthUser verifies the Bearer JWT (issued by /api/auth/register and /login,
+// see lib/auth/jwt.ts). Verification is synchronous, so route handlers don't need
+// `await`. An async verifier (e.g. Supabase Auth) would change every call site.
 
 import { verifyToken } from "@/lib/auth/jwt";
 

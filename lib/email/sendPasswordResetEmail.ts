@@ -1,6 +1,7 @@
 import nodemailer, { type Transporter } from "nodemailer";
 
-// Real email, via nodemailer. Auth is just an email + its password (an app
+// Sends via nodemailer with EMAIL_USER / EMAIL_PASSWORD (an app password for Gmail).
+// EMAIL_SERVICE picks a preset (default "gmail"). For plain SMTP, set EMAIL_HOST and EMAIL_PORT.
 
 let transporter: Transporter | undefined;
 
@@ -35,7 +36,7 @@ export async function sendPasswordResetEmail(to: string, resetUrl: string): Prom
     from,
     to,
     subject: "Reset your password",
-    text: `Someone requested a password reset for this account.\n\nReset your password: ${resetUrl}\n\nIf you didn't request this, you can ignore this email — your password won't change.\n\nThis link expires in 1 hour.`,
+    text: `Someone requested a password reset for this account.\n\nReset your password: ${resetUrl}\n\nIf you didn't request this, you can ignore this email. Your password won't change.\n\nThis link expires in 1 hour.`,
     html: `
       <p>Someone requested a password reset for this account.</p>
       <p><a href="${resetUrl}">Reset your password</a></p>
