@@ -130,13 +130,15 @@ describe("POST /api/tasks", () => {
 });
 
 describe("PATCH /api/tasks (bulk)", () => {
-  it("updates every id in the list", async () => {
+  const url = "http://localhost/api/tasks";
+
+  it("updates every id in the list, scoped to the caller", async () => {
     vi.mocked(repo.updateTasksByIds).mockResolvedValue(3);
 
     const res = await PATCH(
-      new Request("http://localhost/api/tasks", {
+      new Request(url, {
         method: "PATCH",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...authHeaders },
         body: JSON.stringify({ ids: ["t1", "t2", "t3"], data: { status: "done" } }),
       })
     );
@@ -144,18 +146,32 @@ describe("PATCH /api/tasks (bulk)", () => {
 
     expect(res.status).toBe(200);
     expect(body.data.affected).toBe(3);
-    expect(repo.updateTasksByIds).toHaveBeenCalledWith(["t1", "t2", "t3"], { status: "done" });
+    expect(repo.updateTasksByIds).toHaveBeenCalledWith(["t1", "t2", "t3"], { status: "done" }, "user-1");
+  });
+
+  it("returns 401 when no auth header is present", async () => {
+    const res = await PATCH(
+      new Request(url, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: ["t1"], data: { status: "done" } }),
+      })
+    );
+    expect(res.status).toBe(401);
+    expect(repo.updateTasksByIds).not.toHaveBeenCalled();
   });
 });
 
 describe("DELETE /api/tasks (bulk)", () => {
-  it("deletes a specific set of ids", async () => {
+  const url = "http://localhost/api/tasks";
+
+  it("deletes a specific set of ids, scoped to the caller", async () => {
     vi.mocked(repo.deleteTasksByIds).mockResolvedValue(2);
 
     const res = await DELETE(
-      new Request("http://localhost/api/tasks", {
+      new Request(url, {
         method: "DELETE",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...authHeaders },
         body: JSON.stringify({ ids: ["t1", "t2"] }),
       })
     );
@@ -163,16 +179,17 @@ describe("DELETE /api/tasks (bulk)", () => {
 
     expect(res.status).toBe(200);
     expect(body.data.affected).toBe(2);
+    expect(repo.deleteTasksByIds).toHaveBeenCalledWith(["t1", "t2"], "user-1");
     expect(repo.deleteAllTasks).not.toHaveBeenCalled();
   });
 
-  it("deletes every task when { all: true } is sent", async () => {
+  it("deletes all of the caller's tasks when { all: true } is sent", async () => {
     vi.mocked(repo.deleteAllTasks).mockResolvedValue(42);
 
     const res = await DELETE(
-      new Request("http://localhost/api/tasks", {
+      new Request(url, {
         method: "DELETE",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...authHeaders },
         body: JSON.stringify({ all: true }),
       })
     );
@@ -180,6 +197,20 @@ describe("DELETE /api/tasks (bulk)", () => {
 
     expect(res.status).toBe(200);
     expect(body.data.affected).toBe(42);
+    expect(repo.deleteAllTasks).toHaveBeenCalledWith("user-1");
+    expect(repo.deleteTasksByIds).not.toHaveBeenCalled();
+  });
+
+  it("returns 401 without auth and never deletes anything", async () => {
+    const res = await DELETE(
+      new Request(url, {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ all: true }),
+      })
+    );
+    expect(res.status).toBe(401);
+    expect(repo.deleteAllTasks).not.toHaveBeenCalled();
     expect(repo.deleteTasksByIds).not.toHaveBeenCalled();
   });
 });
