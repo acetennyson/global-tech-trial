@@ -1,6 +1,6 @@
 import type { PoolClient, QueryResultRow } from "pg";
 import { getPool } from "@/lib/db/pool";
-import { advanceCount, advanceInsert, advanceSelect, advanceUpdate, advanceDelete, advanceDeleteAll } from "@/lib/db/advanceSQL";
+import { advanceCount, advanceInsert, advanceSelect, advanceUpdate, advanceDelete } from "@/lib/db/advanceSQL";
 import type { Condition } from "@/lib/db/queryBuilder";
 import { generateId } from "@/lib/db/id";
 import type { AuthUser } from "@/lib/auth";
@@ -493,21 +493,19 @@ export async function softDeleteTaskWithVersionIdempotent(
   });
 }
 
-// --- bulk paths: still hard-delete / non-versioned for now. Converting these to
-// tombstone + batched background jobs is Module 5's scope (large-delete safety,
-// job queue), not this module's. ---
 
-export async function updateTasksByIds(ids: string[], input: UpdateTaskInput): Promise<number> {
+export async function updateTasksByIds(ids: string[], input: UpdateTaskInput, userId: string): Promise<number> {
   const row = updateInputToRow(input);
   if (ids.length === 0 || Object.keys(row).length === 0) return 0;
-  return advanceUpdate(TABLE, row, { __IN: { id: ids } });
+  return advanceUpdate(TABLE, row, { __IN: { id: ids }, created_by_id: userId, deleted_at: null });
 }
 
-export async function deleteTasksByIds(ids: string[]): Promise<number> {
+export async function deleteTasksByIds(ids: string[], userId: string): Promise<number> {
   if (ids.length === 0) return 0;
-  return advanceDelete(TABLE, { __IN: { id: ids } });
+  return advanceDelete(TABLE, { __IN: { id: ids }, created_by_id: userId });
 }
 
-export async function deleteAllTasks(): Promise<number> {
-  return advanceDeleteAll(TABLE);
+// `{ all: true }` means "all of MY tasks", never the whole table.
+export async function deleteAllTasks(userId: string): Promise<number> {
+  return advanceDelete(TABLE, { created_by_id: userId });
 }

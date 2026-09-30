@@ -9,7 +9,6 @@ vi.mock("@/lib/db/advanceSQL", () => ({
   advanceInsert: vi.fn(),
   advanceUpdate: vi.fn(),
   advanceDelete: vi.fn(),
-  advanceDeleteAll: vi.fn(),
 }));
 
 const advanceSQL = await import("@/lib/db/advanceSQL");

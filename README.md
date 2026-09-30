@@ -156,7 +156,7 @@ No `Authorization` header, or an invalid/expired token, returns `401`. `createdB
 
 A task is visible to its creator always, and to everyone else only if `visible: true`. Only the creator can edit or delete it (`403` otherwise). A task hidden from you `404`s the same as one that doesn't exist, so existence isn't leaked either way.
 
-Note: the bulk `PATCH /api/tasks` and `DELETE /api/tasks` routes below still don't call `resolveAuthUser` at all — no `Authorization` header is checked on those two. That's a known gap, not something TM-2 touched; see "Scaling to 1 million users" / Module 5 below.
+The bulk `PATCH /api/tasks` and `DELETE /api/tasks` routes require auth too, and are scoped to the caller: they only ever touch tasks you created, and ids belonging to anyone else are skipped (they simply don't count toward `affected`). `{ "all": true }` means "all of my tasks", never the whole table.
 
 ## API Reference
 
@@ -243,11 +243,11 @@ curl -X PATCH http://localhost:3000/api/tasks/01K8XR2QC0J8Z6Y8YB2S3D5N9V \
 
 ```bash
 curl -X PATCH http://localhost:3000/api/tasks \
-  -H "content-type: application/json" \
+  -H "content-type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"ids":["t1","t2","t3"],"data":{"status":"done"}}'
 ```
 
-No auth check and no per-row version check here (see the note under Authorization above).
+Requires auth. Only updates tasks you created; other ids are skipped. No per-row version check here (bulk work moves to an async job in Module 5).
 
 ### `DELETE /api/tasks/:id`: delete one
 
@@ -256,11 +256,11 @@ Soft delete, sets `deleted_at`, doesn't remove the row. `404` if it doesn't exis
 ### `DELETE /api/tasks`: delete many, or all
 
 ```bash
-curl -X DELETE http://localhost:3000/api/tasks -H "content-type: application/json" -d '{"ids":["t1","t2"]}'
-curl -X DELETE http://localhost:3000/api/tasks -H "content-type: application/json" -d '{"all":true}'
+curl -X DELETE http://localhost:3000/api/tasks -H "content-type: application/json" -H "Authorization: Bearer $TOKEN" -d '{"ids":["t1","t2"]}'
+curl -X DELETE http://localhost:3000/api/tasks -H "content-type: application/json" -H "Authorization: Bearer $TOKEN" -d '{"all":true}'
 ```
 
-`ids` for a specific set, `all: true` for everything, kept as two separate shapes so a malformed body can't be misread as "delete everything." Still a hard delete here, not tombstoned, and no auth check (see the note under Authorization above).
+`ids` for a specific set, `all: true` for every task you own, kept as two separate shapes so a malformed body can't be misread as "delete everything." Requires auth and only deletes your own tasks. Still a hard delete here, not tombstoned.
 
 ### `POST /api/sync`: push a batch of offline-originated operations
 
@@ -287,7 +287,7 @@ The current stack (Supabase Postgres, a `pg` pool, Next.js route handlers) holds
 1. **Default to** `cursor`**, not** `offset`**.** See "offset vs. cursor" above, same reasoning at scale: `offset=900000` degrades, `cursor` doesn't.
 2. **Stay on Supabase's connection pooler** (already implemented btw), and size the pool for the whole fleet of app instances, not one. Ten instances each opening ten direct connections is the fastest way to take Postgres down.
 3. **Rate limit with shared state:** A Redis-backed token bucket keyed by user id, not an in-process counter. Two app instances, two separate counters, the limit stops meaning anything.
-4. **Move bulk operations to a background job:** `DELETE /api/tasks` with `{"all": true}` on tens of millions of rows would blow past any request timeout. Enqueue it instead: return `202 Accepted` with a job id, delete in batches from a worker. Fix the missing auth check on the bulk routes at the same time — see the note under Authorization above.
+4. **Move bulk operations to a background job:** `DELETE /api/tasks` with `{"all": true}` on tens of millions of rows would blow past any request timeout. Enqueue it instead: return `202 Accepted` with a job id, delete in batches from a worker.
 5. **Push change delivery instead of polling.** A million clients hitting `GET /api/sync?cursor=...` on a timer is a million wasted requests when nothing changed. Supabase Realtime pushes `task_events` changes to connected clients directly.
 6. **The offline-first client is already built** ([client/](client)) : writes hit a local store first and sync in the background, instead of every click waiting on a round trip. At this scale, "wait for the server to confirm" is its own bottleneck, separate from server capacity, and the gap only gets worse on slow or flaky connections.
 7. **Replace** `search`**'s** `LIKE '%term%'`**:** A leading wildcard can't use a B-tree index, that's a full table scan on every search. Postgres's own fulltext (`tsvector`/`pg_trgm`) or a dedicated engine like Meilisearch once search is a real feature.

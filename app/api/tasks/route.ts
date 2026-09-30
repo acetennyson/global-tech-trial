@@ -18,7 +18,7 @@ async function handleGET(request: Request) {
   }
 }
 
-// create. creator from headers, never body. an Idempotency-Key header makes a
+// create. creator from the verified JWT, never body. an Idempotency-Key header makes a
 // retried request return the original task instead of creating a duplicate.
 async function handlePOST(request: Request) {
   try {
@@ -33,27 +33,31 @@ async function handlePOST(request: Request) {
   }
 }
 
-// bulk patch, one id -> [id]/route.ts instead. No version check here yet — bulk
+// bulk patch, one id -> [id]/route.ts instead. Requires auth and only touches tasks
+// the caller created; other ids are skipped. No version check here yet — bulk
 // operations move to an async job (Module 5) rather than gaining per-row
 // optimistic concurrency in this synchronous path.
 async function handlePATCH(request: Request) {
   try {
+    const user = resolveAuthUser(request);
     const body = await request.json();
     const { ids, data } = bulkUpdateSchema.parse(body);
-    const affected = await updateTasksByIds(ids, data);
+    const affected = await updateTasksByIds(ids, data, user.id);
     return ok({ affected });
   } catch (error) {
     return toErrorResponse(error);
   }
 }
 
-// ids[] or {all:true}, never both paths at once. Still a hard delete — see
+// ids[] or {all:true}, never both paths at once. Requires auth; both shapes are
+// scoped to the caller's own tasks ({all:true} = all of mine). Still a hard delete — see
 // repository.ts; Module 5 converts this to a tombstoning background job.
 async function handleDELETE(request: Request) {
   try {
+    const user = resolveAuthUser(request);
     const body = await request.json().catch(() => ({}));
     const parsed = bulkDeleteSchema.parse(body);
-    const affected = parsed.all ? await deleteAllTasks() : await deleteTasksByIds(parsed.ids!);
+    const affected = parsed.all ? await deleteAllTasks(user.id) : await deleteTasksByIds(parsed.ids!, user.id);
     return ok({ affected });
   } catch (error) {
     return toErrorResponse(error);
