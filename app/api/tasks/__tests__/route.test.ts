@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Task } from "@/lib/types";
 import type { TaskPage } from "@/lib/tasks/repository";
+import { authHeaderFor } from "@/lib/testUtils/authHeader";
 
 vi.mock("@/lib/tasks/repository", () => ({
   listTasks: vi.fn(),
@@ -13,7 +14,7 @@ vi.mock("@/lib/tasks/repository", () => ({
 const repo = await import("@/lib/tasks/repository");
 const { GET, POST, PATCH, DELETE } = await import("../route");
 
-const authHeaders = { "x-user-id": "user-1", "x-user-name": "Ada" };
+const authHeaders = authHeaderFor({ id: "user-1", name: "Ada" });
 
 const sampleTask: Task = {
   id: "01K8XR2QC0J8Z6Y8YB2S3D5N9V",

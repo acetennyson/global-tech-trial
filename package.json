@@ -12,6 +12,8 @@
     "db:migrate": "node --import tsx lib/db/migrate.ts"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "jsonwebtoken": "^9.0.3",
     "next": "16.3.6",
     "pg": "^8.13.1",
     "react": "19.2.8",
@@ -20,6 +22,8 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20",
     "@types/pg": "^8.11.10",
     "@types/react": "^19",

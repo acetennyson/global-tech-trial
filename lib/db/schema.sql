@@ -1,3 +1,14 @@
+-- TM-2: registered users. Kept as its own table rather than folded into the
+-- fake-auth header world tasks already reference (created_by_id is TEXT, not a
+-- FK, precisely so M1's schema didn't have to know about auth yet).
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  name TEXT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   parent_id TEXT NULL REFERENCES tasks (id),

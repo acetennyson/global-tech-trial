@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { authHeaderFor } from "@/lib/testUtils/authHeader";
 
 vi.mock("@/lib/sync/service", () => ({ applySyncBatch: vi.fn() }));
 vi.mock("@/lib/sync/eventsRepository", () => ({ listEventsSince: vi.fn() }));
@@ -7,7 +8,7 @@ const service = await import("@/lib/sync/service");
 const eventsRepo = await import("@/lib/sync/eventsRepository");
 const { GET, POST } = await import("../route");
 
-const authHeaders = { "x-user-id": "user-1", "x-user-name": "Ada" };
+const authHeaders = authHeaderFor({ id: "user-1", name: "Ada" });
 
 beforeEach(() => {
   vi.clearAllMocks();

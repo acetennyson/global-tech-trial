@@ -16,7 +16,7 @@ Every query is parameterized. Table and column names go through an allow-list ch
 
 [lib/validation/task.ts](lib/validation/task.ts) (Zod schemas), [lib/auth.ts](lib/auth.ts) (who's calling, plus `ForbiddenError`), and [lib/http.ts](lib/http.ts) (response envelope) are separate, same reason.
 
-On top of that, [lib/sync/](lib/sync): a push/pull sync protocol for clients that made changes while offline, built on `task_events`.
+On top of that, [lib/sync/](lib/sync): a push/pull sync protocol for clients that made changes while offline, built on `task_events`. And [lib/auth/](lib/auth) + [lib/users/](lib/users): JWT-based registration and login (see Authentication below).
 
 ## Install
 
@@ -30,9 +30,13 @@ Fill in `.env.local` with a Supabase Postgres connection string:
 ```
 DATABASE_URL=postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres
 DB_CONNECTION_LIMIT=10
+JWT_SECRET=<generate with: openssl rand -base64 48>
+JWT_EXPIRES_IN=7d
 ```
 
 Use the pooler connection string (Supabase dashboard, Project Settings, Database, Connection pooling), not the direct `db.<ref>.supabase.co` one. The direct host is IPv6-only and won't resolve on most networks.
+
+`JWT_SECRET` is required — `resolveAuthUser` throws at request time if it's unset. `JWT_EXPIRES_IN` is optional, defaults to `7d`.
 
 Apply the schema:
 
@@ -40,7 +44,7 @@ Apply the schema:
 npm run db:migrate
 ```
 
-This runs [lib/db/schema.sql](lib/db/schema.sql): `tasks`, `task_events`, `idempotency_keys`. You can also paste that file straight into the Supabase SQL Editor.
+This runs [lib/db/schema.sql](lib/db/schema.sql): `users`, `tasks`, `task_events`, `idempotency_keys`. You can also paste that file straight into the Supabase SQL Editor.
 
 ## Run
 
@@ -56,22 +60,57 @@ API served under `http://localhost:3000/api/tasks`.
 npm test
 ```
 
-83 [Vitest](https://vitest.dev) tests across 8 files: query builder SQL, Zod validation, filter-to-SQL mapping, pagination math, sync batch logic, route handlers. Repository and service layers are exercised directly; route tests mock the layer one below.
+110 [Vitest](https://vitest.dev) tests across 14 files: query builder SQL, Zod validation, filter-to-SQL mapping, pagination math, sync batch logic, route handlers, JWT sign/verify, password hashing, and the auth/users routes. Repository and service layers are exercised directly; route tests mock the layer one below.
 
-## Authentication
+`client/` (the offline client, see below) has its own separate suite: `cd client && npm test`.
 
-Still a stand-in, not real auth. No session/JWT yet, the "signed-in user" for writes comes from two headers:
+## Authentication (TM-2: real JWT auth)
+
+`x-user-id`/`x-user-name` are gone. `resolveAuthUser` now verifies a signed JWT:
 
 ```
-x-user-id: <string, required>
-x-user-name: <string, optional>
+Authorization: Bearer <token>
 ```
 
-No `x-user-id`, you get a `401`. `createdBy` always comes from these headers, never the request body, so a client can't forge a creator. Swap the body of `resolveAuthUser` for real session/JWT verification later, nothing that calls it needs to change.
+Get a token from one of:
+
+### `POST /api/auth/register`
+
+```bash
+curl -X POST http://localhost:3000/api/auth/register \
+  -H "content-type: application/json" \
+  -d '{"email":"ada@example.com","password":"correct horse battery staple","name":"Ada"}'
+```
+
+`email`, `password` (min 8 characters) required; `name` optional. `409` if the email is already registered. Returns `{ user, token }` — `user` never includes the password hash.
+
+### `POST /api/auth/login`
+
+```bash
+curl -X POST http://localhost:3000/api/auth/login \
+  -H "content-type: application/json" \
+  -d '{"email":"ada@example.com","password":"correct horse battery staple"}'
+```
+
+Same `{ user, token }` shape. `401` with the same message either way for a wrong password or an unknown email — the password check still runs against a dummy hash even when there's no matching user, so a client can't tell the two apart by response time.
+
+Every other route's `curl` example below assumes you've stashed a token:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login \
+  -H "content-type: application/json" \
+  -d '{"email":"ada@example.com","password":"correct horse battery staple"}' | jq -r .data.token)
+```
+
+No `Authorization` header, or an invalid/expired token, returns `401`. `createdBy` always comes from the token's subject, never the request body, so a client can't forge a creator.
+
+**What actually changed, mechanically:** [lib/auth.ts](lib/auth.ts)'s `resolveAuthUser` swapped from trusting two headers to verifying a signature ([lib/auth/jwt.ts](lib/auth/jwt.ts), HS256 via `jsonwebtoken`, secret in `JWT_SECRET`). That verification is synchronous, which is what keeps every route handler unchanged — no call site had to add `await`. Passwords are hashed with `bcryptjs` ([lib/auth/password.ts](lib/auth/password.ts), cost factor 12) before ever touching the `users` table; the plaintext password is never stored or logged. This is app-owned JWT auth, not Supabase Auth — Supabase's own verification is async, which would force `await` onto every caller. If that's swapped in later, that's a trade to make consciously, not something to discover from a type error.
 
 ### Authorization
 
 A task is visible to its creator always, and to everyone else only if `visible: true`. Only the creator can edit or delete it (`403` otherwise). A task hidden from you `404`s the same as one that doesn't exist, so existence isn't leaked either way.
+
+Note: the bulk `PATCH /api/tasks` and `DELETE /api/tasks` routes below still don't call `resolveAuthUser` at all — no `Authorization` header is checked on those two. That's a known gap, not something TM-2 touched; see "Scaling to 1 million users" / Module 5 below.
 
 ## API Reference
 
@@ -98,7 +137,7 @@ Requires auth. Results are scoped to what you're allowed to see (your own tasks,
 
 ```bash
 curl "http://localhost:3000/api/tasks?status=todo&from=2026-01-01T00:00:00Z&sort=-startTime" \
-  -H "x-user-id: user-42"
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ```json
@@ -131,12 +170,12 @@ Requires auth. `404` if it doesn't exist, is tombstoned, or isn't visible to you
 ```bash
 curl -X POST http://localhost:3000/api/tasks \
   -H "content-type: application/json" \
-  -H "x-user-id: user-42" -H "x-user-name: Ada" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Idempotency-Key: <client-generated uuid, optional>" \
   -d '{"title":"Ship the release","startTime":"2026-01-01T09:00:00Z","endTime":"2026-01-01T17:00:00Z"}'
 ```
 
-`title`, `startTime`, `endTime` required, `endTime` can't be before `startTime`. `parentId`, `description`, `status` (default `todo`), `visible` (default `true`) optional. `id` optional too, a client-generated ULID; the server makes one if you leave it out. Creator always comes from the auth headers, never the body.
+`title`, `startTime`, `endTime` required, `endTime` can't be before `startTime`. `parentId`, `description`, `status` (default `todo`), `visible` (default `true`) optional. `id` optional too, a client-generated ULID; the server makes one if you leave it out. Creator always comes from the token's subject, never the body.
 
 `Idempotency-Key` is optional. Lost the connection right after a POST and not sure if it went through? Resend the exact request with the same key and you get the original task back (`200`, not `201`) instead of a duplicate.
 
@@ -146,7 +185,7 @@ Body: any subset of the `POST` fields, plus a required `version`, the value from
 
 ```bash
 curl -X PATCH http://localhost:3000/api/tasks/01K8XR2QC0J8Z6Y8YB2S3D5N9V \
-  -H "content-type: application/json" -H "x-user-id: user-42" \
+  -H "content-type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"status":"done","version":3}'
 ```
 
@@ -158,7 +197,7 @@ curl -X PATCH http://localhost:3000/api/tasks \
   -d '{"ids":["t1","t2","t3"],"data":{"status":"done"}}'
 ```
 
-No per-row version check here.
+No auth check and no per-row version check here (see the note under Authorization above).
 
 ### `DELETE /api/tasks/:id`: delete one
 
@@ -171,13 +210,13 @@ curl -X DELETE http://localhost:3000/api/tasks -H "content-type: application/jso
 curl -X DELETE http://localhost:3000/api/tasks -H "content-type: application/json" -d '{"all":true}'
 ```
 
-`ids` for a specific set, `all: true` for everything, kept as two separate shapes so a malformed body can't be misread as "delete everything." Still a hard delete here, not tombstoned.
+`ids` for a specific set, `all: true` for everything, kept as two separate shapes so a malformed body can't be misread as "delete everything." Still a hard delete here, not tombstoned, and no auth check (see the note under Authorization above).
 
 ### `POST /api/sync`: push a batch of offline-originated operations
 
 ```bash
 curl -X POST http://localhost:3000/api/sync \
-  -H "content-type: application/json" -H "x-user-id: user-42" \
+  -H "content-type: application/json" -H "Authorization: Bearer $TOKEN" \
   -d '{"operations":[{"id":"op-1","operation":"create","entityId":"t1","payload":{...}}]}'
 ```
 
@@ -185,7 +224,11 @@ Say a phone goes offline, queues a create, an update, then a delete on the same 
 
 ### `GET /api/sync?cursor=...`: pull changes since a cursor
 
-Reads from `task_events`, not `tasks` directly. That's what lets a tombstoned task still reach a client whose only copy is the old, non-deleted one. Returns a page of events plus a `nextCursor`.
+Reads from `task_events`, not `tasks` directly. That's what lets a tombstoned task still reach a client whose only copy is the old, non-deleted one. Scoped the same way as `GET /api/tasks` — an event for a task you can't see is skipped, though it still advances the cursor so the pull doesn't stall on it. Returns a page of events plus a `nextCursor`.
+
+## Offline client (`client/`)
+
+A separate package ([client/](client)) implementing Module 3: local-first writes via IndexedDB (Dexie), a durable sync queue, and a sync engine that drains that queue against `/api/sync` with exponential backoff and conflict surfacing. See [client/src/index.ts](client/src/index.ts) for the public API. It doesn't make HTTP calls itself — a `SyncClient` implementation (the actual `fetch` calls, including the `Authorization` header above) is injected by whatever app embeds it.
 
 ## Scaling to 1 million users
 
@@ -194,9 +237,9 @@ The current stack (Supabase Postgres, a `pg` pool, Next.js route handlers) holds
 1. **Default to `cursor`, not `offset`.** See "offset vs. cursor" above, same reasoning at scale: `offset=900000` degrades, `cursor` doesn't.
 2. **Stay on Supabase's connection pooler** (already set up here, see Install), and size the pool for the whole fleet of app instances, not one. Ten instances each opening ten direct connections is the fastest way to take Postgres down.
 3. **Rate limit with shared state.** A Redis-backed token bucket keyed by user id, not an in-process counter. Two app instances, two separate counters, the limit stops meaning anything.
-4. **Move bulk operations to a background job.** `DELETE /api/tasks` with `{"all": true}` on tens of millions of rows would blow past any request timeout. Enqueue it instead: return `202 Accepted` with a job id, delete in batches from a worker.
+4. **Move bulk operations to a background job.** `DELETE /api/tasks` with `{"all": true}` on tens of millions of rows would blow past any request timeout. Enqueue it instead: return `202 Accepted` with a job id, delete in batches from a worker. Fix the missing auth check on the bulk routes at the same time — see the note under Authorization above.
 5. **Push change delivery instead of polling.** A million clients hitting `GET /api/sync?cursor=...` on a timer is a million wasted requests when nothing changed. Supabase Realtime pushes `task_events` changes to connected clients directly.
-6. **Build an offline-first client.** Writes hit a local store first and sync in the background, instead of every click waiting on a round trip. At this scale, "wait for the server to confirm" is its own bottleneck, separate from server capacity, and the gap only gets worse on slow or flaky connections.
+6. **The offline-first client is already built** ([client/](client), Module 3) — writes hit a local store first and sync in the background, instead of every click waiting on a round trip. At this scale, "wait for the server to confirm" is its own bottleneck, separate from server capacity, and the gap only gets worse on slow or flaky connections.
 7. **Replace `search`'s `LIKE '%term%'`.** A leading wildcard can't use a B-tree index, that's a full table scan on every search. Postgres's own fulltext (`tsvector`/`pg_trgm`) or a dedicated engine like Meilisearch once search is a real feature.
 8. **Cache selectively.** `tasks` is write-heavy, so caching `GET /api/tasks` risks serving stale data right after a write. `GET /api/tasks/:id`, invalidated on that task's own update or delete, is safer to start with.
 9. **Read replicas**, once a single Postgres primary is actually the bottleneck, not before. Check the pooler and indexing first. Route reads that can tolerate slight staleness (list views) to a replica, keep writes and anything version-sensitive on the primary.
