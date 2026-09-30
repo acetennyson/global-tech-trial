@@ -106,3 +106,18 @@ export async function findPasswordResetToken(tokenHash: string): Promise<Passwor
 export async function markPasswordResetTokenUsed(tokenHash: string): Promise<void> {
   await advanceUpdate("password_reset_tokens", { used_at: new Date().toISOString() }, { token_hash: tokenHash });
 }
+
+export async function invalidateOtherPasswordResetTokens(userId: string, exceptTokenHash: string): Promise<void> {
+  const activeTokens = await advanceSelect<PasswordResetTokenRow>("password_reset_tokens", ["token_hash"], {
+    user_id: userId,
+    used_at: null,
+  });
+  const otherHashes = activeTokens.map((row) => row.token_hash).filter((hash) => hash !== exceptTokenHash);
+  if (otherHashes.length === 0) return;
+
+  await advanceUpdate(
+    "password_reset_tokens",
+    { used_at: new Date().toISOString() },
+    { __IN: { token_hash: otherHashes } }
+  );
+}

@@ -7,6 +7,7 @@ import { signToken } from "@/lib/auth/jwt";
 import {
   findPasswordResetToken,
   findUserById,
+  invalidateOtherPasswordResetTokens,
   markPasswordResetTokenUsed,
   updateUserPassword,
 } from "@/lib/users/repository";
@@ -33,8 +34,11 @@ async function handlePOST(request: Request) {
 
     const passwordHash = await hashPassword(password);
     await updateUserPassword(user.id, passwordHash);
-    // single-use. Note: an older unexpired link for the same user still works, not closed here.
+    // single-use, and closes out every other still-active link for this user too —
+    // an older unexpired reset email can no longer be used once the password has
+    // actually been changed.
     await markPasswordResetTokenUsed(tokenHash);
+    await invalidateOtherPasswordResetTokens(user.id, tokenHash);
 
     // same shape as /login, logs them straight in
     const authToken = signToken({ sub: user.id, name: user.name });
