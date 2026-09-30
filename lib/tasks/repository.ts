@@ -1,6 +1,6 @@
 import type { PoolClient, QueryResultRow } from "pg";
 import { getPool } from "@/lib/db/pool";
-import { advanceCount, advanceInsert, advanceSelect, advanceUpdate, advanceDelete } from "@/lib/db/advanceSQL";
+import { advanceCount, advanceInsert, advanceSelect, advanceUpdate } from "@/lib/db/advanceSQL";
 import type { Condition } from "@/lib/db/queryBuilder";
 import { generateId } from "@/lib/db/id";
 import type { AuthUser } from "@/lib/auth";
