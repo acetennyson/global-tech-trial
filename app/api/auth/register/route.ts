@@ -1,10 +1,11 @@
+import { withRequestLogging } from "@/lib/observability";
 import { fail, ok, toErrorResponse } from "@/lib/http";
 import { registerSchema } from "@/lib/validation/auth";
 import { hashPassword } from "@/lib/auth/password";
 import { signToken } from "@/lib/auth/jwt";
 import { createUser } from "@/lib/users/repository";
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   try {
     const body = await request.json();
     const { email, password, name } = registerSchema.parse(body);
@@ -22,3 +23,5 @@ export async function POST(request: Request) {
     return toErrorResponse(error);
   }
 }
+
+export const POST = withRequestLogging(handlePOST);
