@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, useSyncExternalStore, type ReactNode } from "react";
 
 /* ---------- request plumbing ---------- */
 
@@ -164,20 +164,21 @@ function Account({ token, onAuth }: { token: string | null; onAuth: (t: string |
   );
 }
 
-function CreateTask({ token }: { token: string | null }) {
+// false during server render and hydration, true once on the client. Lets us read the
+// browser clock for default dates without setState-in-effect or a hydration mismatch.
+const subscribeNoop = () => () => {};
+function useIsClient() {
+  return useSyncExternalStore(subscribeNoop, () => true, () => false);
+}
+
+function CreateTaskForm({ token }: { token: string | null }) {
   const [title, setTitle] = useState("Ship the release");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState<"todo" | "inProgress" | "done">("todo");
   const [visible, setVisible] = useState(true);
-  const [start, setStart] = useState("");
-  const [end, setEnd] = useState("");
+  const [start, setStart] = useState(() => toLocalInput(new Date()));
+  const [end, setEnd] = useState(() => toLocalInput(new Date(new Date().getTime() + 3600_000)));
   const { result, loading, run } = useCall(token);
-
-  useEffect(() => {
-    const now = new Date();
-    setStart(toLocalInput(now));
-    setEnd(toLocalInput(new Date(now.getTime() + 3600_000)));
-  }, []);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -189,7 +190,7 @@ function CreateTask({ token }: { token: string | null }) {
   }
 
   return (
-    <Section id="create" tone="light" title="Create a task." sub="Times are validated, the creator comes from your token, and a retry never makes a duplicate.">
+    <>
       <FormCard>
         <form onSubmit={submit} className="flex flex-col gap-4">
           <Field label="Title"><input className={inputCls} value={title} onChange={(e) => setTitle(e.target.value)} required /></Field>
@@ -210,6 +211,15 @@ function CreateTask({ token }: { token: string | null }) {
         </form>
       </FormCard>
       <ResultPanel call={result} loading={loading} />
+    </>
+  );
+}
+
+function CreateTask({ token }: { token: string | null }) {
+  const isClient = useIsClient();
+  return (
+    <Section id="create" tone="light" title="Create a task." sub="Times are validated, the creator comes from your token, and a retry never makes a duplicate.">
+      {isClient ? <CreateTaskForm token={token} /> : <div className="min-h-[520px] rounded-[28px] bg-[var(--card)] ring-1 ring-[var(--line)] lg:col-span-2" />}
     </Section>
   );
 }
