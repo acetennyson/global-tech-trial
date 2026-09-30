@@ -56,4 +56,28 @@ describe("POST /api/auth/forgot-password", () => {
     expect(res.status).toBe(400);
     expect(usersRepo.findUserByEmail).not.toHaveBeenCalled();
   });
+
+  it("returns the exact same 200 response, not a 500, when the email send fails for a real account", async () => {
+    // Regression: a 500 here (vs 200 for unknown emails) would reveal registered emails.
+    vi.mocked(usersRepo.findUserByEmail).mockResolvedValue(EXISTING_USER);
+    vi.mocked(usersRepo.createPasswordResetToken).mockResolvedValue(undefined);
+    vi.mocked(email.sendPasswordResetEmail).mockRejectedValue(new Error("smtp connection refused"));
+
+    const res = await POST(request({ email: "ada@example.com" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.message).toMatch(/if an account exists/i);
+  });
+
+  it("returns the exact same 200 response when token creation itself fails for a real account", async () => {
+    vi.mocked(usersRepo.findUserByEmail).mockResolvedValue(EXISTING_USER);
+    vi.mocked(usersRepo.createPasswordResetToken).mockRejectedValue(new Error("db unavailable"));
+
+    const res = await POST(request({ email: "ada@example.com" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.message).toMatch(/if an account exists/i);
+  });
 });

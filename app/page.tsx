@@ -1,7 +1,6 @@
 import Playground from "./_components/Playground";
 
-// The product is an HTTP API with no app UI. This page introduces it and lets you
-// call the real endpoints from the browser.
+// The product is an HTTP API. This page lists the endpoints and lets you call them from the browser.
 
 const endpoints: { method: string; path: string; note: string }[] = [
   { method: "POST", path: "/api/auth/register", note: "Create an account, returns a JWT" },
@@ -30,6 +29,7 @@ export default function Home() {
             <li><a href="#account" className="hover:text-black">Account</a></li>
             <li><a href="#create" className="hover:text-black">Create</a></li>
             <li><a href="#tasks" className="hover:text-black">Tasks</a></li>
+            <li><a href="#reset" className="hover:text-black">Reset</a></li>
             <li><a href="#health" className="hover:text-black">Health</a></li>
             <li><a href="#reference" className="hover:text-black">Reference</a></li>
           </ul>

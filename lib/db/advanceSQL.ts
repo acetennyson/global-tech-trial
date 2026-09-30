@@ -12,11 +12,9 @@ import {
 
 type Executor = Pool | PoolClient;
 
-// TS port of advanceSQL.php, now on Postgres via `pg` instead of mysql2.
+// Runs queryBuilder output against Postgres via `pg`.
 
-// queryBuilder is DB-agnostic and emits "?" placeholders (its own tests assert on
-// that exact SQL). Postgres wants positional "$1, $2, ..." — converting right
-// before the query goes over the wire keeps that difference in exactly one place.
+// queryBuilder emits "?" placeholders. Postgres wants "$1, $2, ...", converted here.
 function toPositional(sql: string): string {
   let n = 0;
   return sql.replace(/\?/g, () => `$${++n}`);
@@ -54,8 +52,7 @@ export async function advanceInsert(
   conn: Executor = getPool()
 ): Promise<string> {
   const { sql, params } = buildInsertQuery(table, data);
-  // pg has no insertId/LAST_INSERT_ID() equivalent; RETURNING id is the Postgres way,
-  // and works whether `id` was client-supplied (offline-created tasks) or server-default.
+  // RETURNING id works for both client-supplied and server-generated ids
   const result = await conn.query<{ id: string }>(`${toPositional(sql)} RETURNING id`, params);
   return result.rows[0].id;
 }

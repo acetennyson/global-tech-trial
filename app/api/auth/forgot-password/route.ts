@@ -1,4 +1,5 @@
 import { withRequestLogging } from "@/lib/observability";
+import { logger } from "@/lib/logger";
 import { ok, toErrorResponse } from "@/lib/http";
 import { forgotPasswordSchema } from "@/lib/validation/auth";
 import { generateResetToken } from "@/lib/auth/resetToken";
@@ -15,12 +16,19 @@ async function handlePOST(request: Request) {
 
     const user = await findUserByEmail(email);
     if (user) {
-      const { token, tokenHash, expiresAt } = generateResetToken();
-      await createPasswordResetToken(user.id, tokenHash, expiresAt);
+      // Failures here are logged, not returned. If SMTP is down, a registered email
+      // must not get a 500 while an unknown one gets 200, or attackers could use
+      // that difference to find registered emails.
+      try {
+        const { token, tokenHash, expiresAt } = generateResetToken();
+        await createPasswordResetToken(user.id, tokenHash, expiresAt);
 
-      const appUrl = process.env.APP_URL ?? "http://localhost:3000";
-      const resetUrl = `${appUrl}/reset-password?token=${token}`;
-      await sendPasswordResetEmail(user.email, resetUrl);
+        const appUrl = process.env.APP_URL ?? "http://localhost:3000";
+        const resetUrl = `${appUrl}/reset-password?token=${token}`;
+        await sendPasswordResetEmail(user.email, resetUrl);
+      } catch (error) {
+        logger.error("failed to create/send password reset token", { err: error });
+      }
     }
 
     return ok({ message: GENERIC_MESSAGE });

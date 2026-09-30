@@ -1,7 +1,6 @@
 import bcrypt from "bcryptjs";
 
-// Cost factor 12: deliberately expensive (~100-300ms) so a leaked hash table
-// resists offline brute force, while staying fast enough for one login request.
+// Cost factor 12 (about 100-300ms per hash): slow enough to resist brute force, fast enough for a login.
 const SALT_ROUNDS = 12;
 
 export async function hashPassword(plain: string): Promise<string> {

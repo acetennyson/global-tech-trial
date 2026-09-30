@@ -34,9 +34,7 @@ async function handlePOST(request: Request) {
 
     const passwordHash = await hashPassword(password);
     await updateUserPassword(user.id, passwordHash);
-    // single-use, and closes out every other still-active link for this user too —
-    // an older unexpired reset email can no longer be used once the password has
-    // actually been changed.
+    // single-use, and every other reset link for this user stops working too
     await markPasswordResetTokenUsed(tokenHash);
     await invalidateOtherPasswordResetTokens(user.id, tokenHash);
 

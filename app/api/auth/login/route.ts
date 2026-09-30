@@ -11,6 +11,9 @@ async function handlePOST(request: Request) {
     const { email, password } = loginSchema.parse(body);
 
     const user = await findUserByEmail(email);
+    // Same message for an unknown email and a wrong password. The bcrypt compare
+    // always runs (against a dummy hash if there's no user), so response time
+    // doesn't reveal which emails exist.
     const passwordHash = user?.passwordHash ?? DUMMY_HASH;
     const validPassword = await verifyPassword(password, passwordHash);
 
@@ -25,8 +28,7 @@ async function handlePOST(request: Request) {
   }
 }
 
-// A real bcrypt hash of an unguessable placeholder, purely so the timing of
-// "no such user" matches "wrong password" (see comment above).
+// Dummy bcrypt hash, so "no such user" takes as long as "wrong password".
 const DUMMY_HASH = "$2a$12$CwTycUXWue0Thq9StjUM0uJ8w5R.d1B9r5g/PkGoK.Rw9E1yz.iOG";
 
 export const POST = withRequestLogging(handlePOST);

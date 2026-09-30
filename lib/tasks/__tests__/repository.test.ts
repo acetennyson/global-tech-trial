@@ -11,6 +11,15 @@ vi.mock("@/lib/db/advanceSQL", () => ({
   advanceDelete: vi.fn(),
 }));
 
+const poolQuery = vi.fn();
+const clientQuery = vi.fn();
+vi.mock("@/lib/db/pool", () => ({
+  getPool: () => ({
+    query: poolQuery,
+    connect: async () => ({ query: clientQuery, release: vi.fn() }),
+  }),
+}));
+
 const advanceSQL = await import("@/lib/db/advanceSQL");
 const { filtersToCondition, listTasks, rowToTask } = await import("../repository");
 
@@ -35,6 +44,8 @@ function row(id: string): TaskRow {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clientQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+  poolQuery.mockResolvedValue({ rows: [], rowCount: 0 });
 });
 
 describe("rowToTask", () => {
@@ -209,5 +220,136 @@ describe("listTasks", () => {
     expect(result.total).toBeNull();
     expect(result.hasMore).toBe(true); // got a full page, so there may be more
     expect(result.nextCursor).toBe("t102"); // id of the last row
+  });
+});
+
+describe("idempotency keys are scoped per user", () => {
+  it("looks up the stored response by (user_id, key), never by key alone", async () => {
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValueOnce([]); // no stored response for this user
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValueOnce([row("t1")]); // reload after insert
+    vi.mocked(advanceSQL.advanceInsert).mockResolvedValue("t1");
+
+    const { createTaskIdempotent } = await import("../repository");
+    await createTaskIdempotent(
+      { title: "x", status: "todo", visible: true, startTime: "2026-01-01T09:00:00Z", endTime: "2026-01-01T10:00:00Z" } as never,
+      { id: "user-B", name: "Bob" },
+      "shared-key"
+    );
+
+    expect(advanceSQL.advanceSelect).toHaveBeenNthCalledWith(
+      1,
+      "idempotency_keys",
+      ["response", "request_hash"],
+      { user_id: "user-B", key: "shared-key" },
+      expect.anything()
+    );
+    const keyInsert = vi.mocked(advanceSQL.advanceInsert).mock.calls.find(([table]) => table === "idempotency_keys");
+    expect(keyInsert?.[1]).toMatchObject({ user_id: "user-B", key: "shared-key" });
+  });
+
+  it("does not replay another user's stored task for the same key", async () => {
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValue([]); // user-B has no row under this key
+    vi.mocked(advanceSQL.advanceInsert).mockResolvedValue("t2");
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValueOnce([]).mockResolvedValueOnce([row("t2")]);
+
+    const { createTaskIdempotent } = await import("../repository");
+    const res = await createTaskIdempotent(
+      { title: "x", status: "todo", visible: true, startTime: "2026-01-01T09:00:00Z", endTime: "2026-01-01T10:00:00Z" } as never,
+      { id: "user-B", name: "Bob" },
+      "key-owned-by-user-A"
+    );
+    expect(res.replayed).toBe(false);
+  });
+});
+
+describe("idempotency key is bound to the original request", () => {
+  const input = { title: "A", status: "todo", visible: true, startTime: "2026-01-01T09:00:00Z", endTime: "2026-01-01T10:00:00Z" } as never;
+  const user = { id: "user-1", name: "Ada" };
+
+  it("replays the stored task when the same key comes with the same body", async () => {
+    const { hashRequest } = await import("@/lib/idempotency");
+    const { createTaskIdempotent } = await import("../repository");
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValueOnce([
+      { response: rowToTask(row("t1")), request_hash: hashRequest({ op: "create", input }) },
+    ] as never);
+
+    const res = await createTaskIdempotent(input, user, "k1");
+    expect(res.replayed).toBe(true);
+    expect(advanceSQL.advanceInsert).not.toHaveBeenCalled();
+  });
+
+  it("throws IdempotencyKeyReuseError (and creates nothing) when the same key comes with a different body", async () => {
+    const { IdempotencyKeyReuseError } = await import("@/lib/idempotency");
+    const { createTaskIdempotent } = await import("../repository");
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValueOnce([
+      { response: rowToTask(row("t1")), request_hash: "hash-of-a-different-body" },
+    ] as never);
+
+    await expect(createTaskIdempotent(input, user, "k1")).rejects.toBeInstanceOf(IdempotencyKeyReuseError);
+    expect(advanceSQL.advanceInsert).not.toHaveBeenCalled();
+  });
+
+  it("stores the request hash with a newly created key", async () => {
+    const { createTaskIdempotent } = await import("../repository");
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValueOnce([]).mockResolvedValueOnce([row("t9")]);
+    vi.mocked(advanceSQL.advanceInsert).mockResolvedValue("t9");
+
+    await createTaskIdempotent(input, user, "k2");
+    const keyInsert = vi.mocked(advanceSQL.advanceInsert).mock.calls.find(([t]) => t === "idempotency_keys");
+    expect(keyInsert?.[1]).toHaveProperty("request_hash");
+  });
+});
+
+describe("bulk delete is a tombstone, not a hard delete", () => {
+  it("soft-deletes only the caller's live tasks and writes a task.deleted event for each", async () => {
+    const { softDeleteTasksByIds } = await import("../repository");
+    clientQuery.mockImplementation(async (sql: string) =>
+      /UPDATE tasks/.test(sql) ? { rows: [row("t1"), row("t2")], rowCount: 2 } : { rows: [], rowCount: 0 }
+    );
+    vi.mocked(advanceSQL.advanceInsert).mockResolvedValue("e");
+
+    const affected = await softDeleteTasksByIds(["t1", "t2", "someone-elses"], "user-1");
+
+    const update = clientQuery.mock.calls.find(([sql]) => /UPDATE tasks/.test(sql as string));
+    expect(update?.[0]).toContain("deleted_at = NOW()");
+    expect(update?.[0]).toContain("created_by_id = $1");
+    expect(update?.[0]).toContain("deleted_at IS NULL");
+    expect(update?.[1]).toEqual(["user-1", ["t1", "t2", "someone-elses"]]);
+    expect(affected).toBe(2);
+
+    const events = vi.mocked(advanceSQL.advanceInsert).mock.calls.filter(([t]) => t === "task_events");
+    expect(events).toHaveLength(2);
+    expect(events[0][1]).toMatchObject({ event_type: "task.deleted", actor_id: "user-1" });
+    expect(advanceSQL.advanceDelete).not.toHaveBeenCalled();
+  });
+
+  it("softDeleteAllTasks only ever scopes to the caller (no id filter, still owner-scoped)", async () => {
+    const { softDeleteAllTasks } = await import("../repository");
+    await softDeleteAllTasks("user-1");
+    const update = clientQuery.mock.calls.find(([sql]) => /UPDATE tasks/.test(sql as string));
+    expect(update?.[0]).toContain("created_by_id = $1");
+    expect(update?.[1]).toEqual(["user-1"]);
+  });
+
+  it("does nothing for an empty id list", async () => {
+    const { softDeleteTasksByIds } = await import("../repository");
+    expect(await softDeleteTasksByIds([], "user-1")).toBe(0);
+    expect(clientQuery).not.toHaveBeenCalled();
+  });
+});
+
+describe("purgeDeletedTasks", () => {
+  it("hard-deletes only tombstones older than the window that have no child tasks", async () => {
+    const { purgeDeletedTasks } = await import("../repository");
+    poolQuery.mockResolvedValue({ rows: [], rowCount: 3 });
+
+    const purged = await purgeDeletedTasks(86400);
+
+    const [sql, params] = poolQuery.mock.calls[0];
+    expect(sql).toContain("deleted_at IS NOT NULL");
+    expect(sql).toContain("make_interval(secs => $1)");
+    expect(sql).toContain("NOT EXISTS");
+    expect(params).toEqual([86400]);
+    expect(purged).toBe(3);
   });
 });

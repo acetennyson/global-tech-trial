@@ -11,8 +11,7 @@ function parseId(raw: string): string | null {
 
 type Params = { params: Promise<{ id: string }> };
 
-// view one. a task not visible to the caller (not theirs, and not `visible`)
-// 404s the same as a task that doesn't exist — existence isn't leaked either way.
+// view one. A hidden task 404s, same as a missing one.
 async function handleGET(request: Request, { params }: Params) {
   try {
     const user = resolveAuthUser(request);
@@ -28,9 +27,8 @@ async function handleGET(request: Request, { params }: Params) {
   }
 }
 
-// update one. requires the version the client last saw; a mismatch means
-// someone else changed it first and comes back as 409, not a silent overwrite.
-// Only the task's creator may edit it.
+// update one. Needs the version the client last saw. A stale one returns 409.
+// Creator only.
 async function handlePATCH(request: Request, { params }: Params) {
   try {
     const user = resolveAuthUser(request);
@@ -58,8 +56,7 @@ async function handlePATCH(request: Request, { params }: Params) {
   }
 }
 
-// delete one — a tombstone (`deleted_at`), not a row removal. Only the task's
-// creator may delete it.
+// delete one: sets `deleted_at`, the row stays. Creator only.
 async function handleDELETE(request: Request, { params }: Params) {
   try {
     const user = resolveAuthUser(request);

@@ -25,17 +25,11 @@ export interface EventPage {
   nextCursor: string | null;
 }
 
-// task_events.id is a ULID (see lib/db/id.ts), so it sorts lexicographically by
-// creation time — the same property the tasks table's own cursor pagination
-// relies on. That's what lets a plain "id > cursor" comparison double as a
-// durable change-feed cursor with no separate sequence column.
-// `viewerId` scopes the *returned* events to what that user may see (their own
-// tasks, plus anything `visible`) — the same rule listTasks applies to GET
-// /api/tasks. A private event for someone else's task still advances the
-// cursor (it's real data the caller has now seen and shouldn't be re-sent), it
-// just isn't included in `events`. Without this, any authenticated user could
-// read every task's full history through the pull endpoint regardless of
-// ownership or visibility.
+// task_events.id is a ULID, so it sorts by creation time and `id > cursor` works as a
+// change-feed cursor.
+// `viewerId` limits the returned events to tasks that user can see (own, or visible).
+// Events for hidden tasks are skipped but still move the cursor forward, so the pull
+// doesn't stall on them.
 export async function listEventsSince(cursor: string | null, viewerId: string, limit = 200): Promise<EventPage> {
   const condition = cursor
     ? { __GREATER: { id: cursor }, __ORDERBY: [{ column: "id", asc: true }], __LIMIT: limit }
@@ -43,10 +37,8 @@ export async function listEventsSince(cursor: string | null, viewerId: string, l
 
   const rows = await advanceSelect<TaskEventRowPacket>(EVENTS_TABLE, "*", condition);
 
-  // Multiple events can exist for the same task_id in one page (e.g. created
-  // then updated before the client ever caught up). Only the latest matters to
-  // a puller reconstructing current state, but earlier ones still advance the
-  // cursor, so we fold rather than filter by recency.
+  // A page can hold several events for one task (created, then updated). Only the
+  // latest matters for current state, but all of them advance the cursor.
   const byTaskId = new Map<string, SyncEvent>();
   for (const row of rows) {
     const visible = row.payload.visible || row.payload.createdById === viewerId;
