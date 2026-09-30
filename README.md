@@ -94,6 +94,28 @@ curl -X POST http://localhost:3000/api/auth/login \
 
 Same `{ user, token }` shape. `401` with the same message either way for a wrong password or an unknown email — the password check still runs against a dummy hash even when there's no matching user, so a client can't tell the two apart by response time.
 
+### `POST /api/auth/forgot-password`
+
+```bash
+curl -X POST http://localhost:3000/api/auth/forgot-password \
+  -H "content-type: application/json" \
+  -d '{"email":"ada@example.com"}'
+```
+
+Always `200` with the same generic message, whether or not that email has an account, otherwise this endpoint becomes a way to check who's registered. If the account exists, a single-use reset token is generated, stored (hashed, `lib/auth/resetToken.ts`) with a 1 hour expiry, and a reset link is emailed via `sendPasswordResetEmail` ([lib/email/sendPasswordResetEmail.ts](lib/email/sendPasswordResetEmail.ts)), sent with nodemailer using `EMAIL_USER`/`EMAIL_PASSWORD` (see `.env.example`, an app password for providers like Gmail that require one, not the account's real login password).
+
+### `POST /api/auth/reset-password`
+
+```bash
+curl -X POST http://localhost:3000/api/auth/reset-password \
+  -H "content-type: application/json" \
+  -d '{"token":"<from the emailed/logged link>","password":"a new password, min 8 chars"}'
+```
+
+`400` for a token that's missing, already used, or expired, same generic message for all three, nothing here should reveal which. On success: password updated, token marked used so the same link can't work twice, and returns `{ user, token }` (a fresh login), same shape as register/login.
+
+**No frontend for this yet.** The emailed link points at `${APP_URL}/reset-password?token=...`, but that page doesn't exist in this project. There's nothing that needs it to, though: the token is just a string sitting in the URL, so until a real reset-password page exists, grab it from the link by hand and call the endpoint above directly (curl, Postman, etc.). Once a frontend does exist, its only job here is reading `token` off the query string and submitting it, same as this curl example does.
+
 Every other route's `curl` example below assumes you've stashed a token:
 
 ```bash

@@ -3,10 +3,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db/advanceSQL", () => ({
   advanceSelect: vi.fn(),
   advanceInsert: vi.fn(),
+  advanceUpdate: vi.fn(),
 }));
 
 const advanceSQL = await import("@/lib/db/advanceSQL");
-const { findUserByEmail, findUserById, createUser } = await import("../repository");
+const {
+  findUserByEmail,
+  findUserById,
+  createUser,
+  updateUserPassword,
+  createPasswordResetToken,
+  findPasswordResetToken,
+  markPasswordResetTokenUsed,
+} = await import("../repository");
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -65,5 +74,53 @@ describe("createUser", () => {
   it("rethrows an unrelated database error", async () => {
     vi.mocked(advanceSQL.advanceInsert).mockRejectedValue(new Error("connection reset"));
     await expect(createUser({ email: "ada@example.com", passwordHash: "hashed", name: null })).rejects.toThrow("connection reset");
+  });
+});
+
+describe("updateUserPassword", () => {
+  it("updates password_hash for the given user id", async () => {
+    vi.mocked(advanceSQL.advanceUpdate).mockResolvedValue(1 as never);
+    await updateUserPassword("user-1", "new-hash");
+    expect(advanceSQL.advanceUpdate).toHaveBeenCalledWith("users", { password_hash: "new-hash" }, { id: "user-1" });
+  });
+});
+
+describe("password reset tokens", () => {
+  it("createPasswordResetToken inserts a row keyed by user and token hash", async () => {
+    vi.mocked(advanceSQL.advanceInsert).mockResolvedValue(undefined as never);
+    const expiresAt = new Date("2026-02-01T00:00:00Z");
+
+    await createPasswordResetToken("user-1", "abc123hash", expiresAt);
+
+    const [[table, row]] = vi.mocked(advanceSQL.advanceInsert).mock.calls;
+    expect(table).toBe("password_reset_tokens");
+    expect(row).toMatchObject({ user_id: "user-1", token_hash: "abc123hash", expires_at: expiresAt.toISOString() });
+  });
+
+  it("findPasswordResetToken returns null when no row matches", async () => {
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValue([] as never);
+    expect(await findPasswordResetToken("missing")).toBeNull();
+  });
+
+  it("findPasswordResetToken maps a found row, including a null used_at", async () => {
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValue([
+      { token_hash: "abc123hash", user_id: "user-1", expires_at: "2026-02-01T00:00:00Z", used_at: null },
+    ] as never);
+
+    expect(await findPasswordResetToken("abc123hash")).toEqual({
+      userId: "user-1",
+      expiresAt: "2026-02-01T00:00:00Z",
+      usedAt: null,
+    });
+  });
+
+  it("markPasswordResetTokenUsed sets used_at for the given token hash", async () => {
+    vi.mocked(advanceSQL.advanceUpdate).mockResolvedValue(1 as never);
+    await markPasswordResetTokenUsed("abc123hash");
+
+    const [[table, row, condition]] = vi.mocked(advanceSQL.advanceUpdate).mock.calls;
+    expect(table).toBe("password_reset_tokens");
+    expect(row).toHaveProperty("used_at");
+    expect(condition).toEqual({ token_hash: "abc123hash" });
   });
 });

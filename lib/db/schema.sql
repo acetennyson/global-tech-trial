@@ -9,6 +9,20 @@ CREATE TABLE IF NOT EXISTS users (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Forgot-password flow. Only the token's hash is stored (see lib/auth/resetToken.ts,
+-- same reasoning as never storing a plaintext password). One row per issued link;
+-- `used_at` makes a link single-use, `expires_at` bounds how long it's live.
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  user_id TEXT NOT NULL REFERENCES users (id),
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user ON password_reset_tokens (user_id);
+
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   parent_id TEXT NULL REFERENCES tasks (id),
