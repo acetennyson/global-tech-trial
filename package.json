@@ -9,7 +9,8 @@
     "lint": "eslint --max-warnings=0",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:migrate": "node --import tsx lib/db/migrate.ts"
+    "db:migrate": "node --import tsx lib/db/migrate.ts",
+    "db:purge": "node --import tsx lib/db/purge.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

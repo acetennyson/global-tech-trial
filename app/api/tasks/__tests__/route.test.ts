@@ -7,8 +7,8 @@ vi.mock("@/lib/tasks/repository", () => ({
   listTasks: vi.fn(),
   createTaskIdempotent: vi.fn(),
   updateTasksByIds: vi.fn(),
-  deleteTasksByIds: vi.fn(),
-  deleteAllTasks: vi.fn(),
+  softDeleteTasksByIds: vi.fn(),
+  softDeleteAllTasks: vi.fn(),
 }));
 
 const repo = await import("@/lib/tasks/repository");
@@ -180,8 +180,8 @@ describe("PATCH /api/tasks (bulk)", () => {
 describe("DELETE /api/tasks (bulk)", () => {
   const url = "http://localhost/api/tasks";
 
-  it("deletes a specific set of ids, scoped to the caller", async () => {
-    vi.mocked(repo.deleteTasksByIds).mockResolvedValue(2);
+  it("tombstones a specific set of ids, scoped to the caller", async () => {
+    vi.mocked(repo.softDeleteTasksByIds).mockResolvedValue(2);
 
     const res = await DELETE(
       new Request(url, {
@@ -194,12 +194,12 @@ describe("DELETE /api/tasks (bulk)", () => {
 
     expect(res.status).toBe(200);
     expect(body.data.affected).toBe(2);
-    expect(repo.deleteTasksByIds).toHaveBeenCalledWith(["t1", "t2"], "user-1");
-    expect(repo.deleteAllTasks).not.toHaveBeenCalled();
+    expect(repo.softDeleteTasksByIds).toHaveBeenCalledWith(["t1", "t2"], "user-1");
+    expect(repo.softDeleteAllTasks).not.toHaveBeenCalled();
   });
 
-  it("deletes all of the caller's tasks when { all: true } is sent", async () => {
-    vi.mocked(repo.deleteAllTasks).mockResolvedValue(42);
+  it("tombstones all of the caller's tasks when { all: true } is sent", async () => {
+    vi.mocked(repo.softDeleteAllTasks).mockResolvedValue(42);
 
     const res = await DELETE(
       new Request(url, {
@@ -212,8 +212,8 @@ describe("DELETE /api/tasks (bulk)", () => {
 
     expect(res.status).toBe(200);
     expect(body.data.affected).toBe(42);
-    expect(repo.deleteAllTasks).toHaveBeenCalledWith("user-1");
-    expect(repo.deleteTasksByIds).not.toHaveBeenCalled();
+    expect(repo.softDeleteAllTasks).toHaveBeenCalledWith("user-1");
+    expect(repo.softDeleteTasksByIds).not.toHaveBeenCalled();
   });
 
   it("returns 401 without auth and never deletes anything", async () => {
@@ -225,7 +225,7 @@ describe("DELETE /api/tasks (bulk)", () => {
       })
     );
     expect(res.status).toBe(401);
-    expect(repo.deleteAllTasks).not.toHaveBeenCalled();
-    expect(repo.deleteTasksByIds).not.toHaveBeenCalled();
+    expect(repo.softDeleteAllTasks).not.toHaveBeenCalled();
+    expect(repo.softDeleteTasksByIds).not.toHaveBeenCalled();
   });
 });

@@ -75,9 +75,8 @@ CREATE TRIGGER trg_tasks_set_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION set_updated_at();
 
--- Change/audit log for tasks. Table only at this stage — writing to it
--- transactionally alongside task mutations, and consuming it for sync/realtime,
--- is Module 2 / Module 4 / Module 5's work.
+-- Change/audit log for tasks. Every create/update/delete (single and bulk) writes a
+-- row here in the same transaction as the task change; GET /api/sync reads it.
 CREATE TABLE IF NOT EXISTS task_events (
   id TEXT PRIMARY KEY,
 

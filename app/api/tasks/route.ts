@@ -1,7 +1,7 @@
 import { withRequestLogging } from "@/lib/observability";
 import { resolveAuthUser } from "@/lib/auth";
 import { ok, toErrorResponse } from "@/lib/http";
-import { deleteAllTasks, deleteTasksByIds, createTaskIdempotent, listTasks, updateTasksByIds } from "@/lib/tasks/repository";
+import { createTaskIdempotent, listTasks, softDeleteAllTasks, softDeleteTasksByIds, updateTasksByIds } from "@/lib/tasks/repository";
 import { bulkDeleteSchema, bulkUpdateSchema, createTaskSchema, searchParamsToObject, taskFiltersSchema } from "@/lib/validation/task";
 
 // list + filter. scoped to what the caller may see: their own tasks, plus
@@ -57,7 +57,7 @@ async function handleDELETE(request: Request) {
     const user = resolveAuthUser(request);
     const body = await request.json().catch(() => ({}));
     const parsed = bulkDeleteSchema.parse(body);
-    const affected = parsed.all ? await deleteAllTasks(user.id) : await deleteTasksByIds(parsed.ids!, user.id);
+    const affected = parsed.all ? await softDeleteAllTasks(user.id) : await softDeleteTasksByIds(parsed.ids!, user.id);
     return ok({ affected });
   } catch (error) {
     return toErrorResponse(error);

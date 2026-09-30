@@ -260,7 +260,7 @@ curl -X DELETE http://localhost:3000/api/tasks -H "content-type: application/jso
 curl -X DELETE http://localhost:3000/api/tasks -H "content-type: application/json" -H "Authorization: Bearer $TOKEN" -d '{"all":true}'
 ```
 
-`ids` for a specific set, `all: true` for every task you own, kept as two separate shapes so a malformed body can't be misread as "delete everything." Requires auth and only deletes your own tasks. Still a hard delete here, not tombstoned.
+`ids` for a specific set, `all: true` for every task you own, kept as two separate shapes so a malformed body can't be misread as "delete everything." Requires auth and only deletes your own tasks. This is a tombstone, exactly like `DELETE /api/tasks/:id`: rows get `deleted_at`, a version bump and one `task.deleted` event each (all in one transaction), so a device that syncs later is told the tasks are gone. Permanent removal happens separately: `npm run db:purge` hard-deletes tombstones older than `TOMBSTONE_RETENTION_SECONDS` (default 30 days). A device offline longer than that window must do a full resync instead of an incremental pull.
 
 ### `POST /api/sync`: push a batch of offline-originated operations
 
