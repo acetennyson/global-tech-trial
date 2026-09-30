@@ -36,7 +36,7 @@ export const createTaskSchema = z
 
 // shared by updateTaskSchema (bulk PATCH, no version) and patchTaskSchema
 // (single-item PATCH, version required) so the two field sets can't drift apart.
-const updateFieldsShape = {
+export const updateFieldsShape = {
   parentId: idString.nullish(),
   title: z.string().trim().min(1).max(255).optional(),
   description: z.string().trim().max(5000).nullish(),

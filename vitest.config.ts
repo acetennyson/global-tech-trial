@@ -6,6 +6,8 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["**/*.test.ts"],
-    exclude: ["node_modules/**", ".next/**"],
+    // client/ is its own package (own vitest.config.ts, own fake-indexeddb setup)
+    // and is run via `npm test` inside client/, not from the root suite.
+    exclude: ["node_modules/**", ".next/**", "client/**"],
   },
 });

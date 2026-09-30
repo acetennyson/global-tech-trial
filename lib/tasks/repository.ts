@@ -280,6 +280,45 @@ export type WriteOutcome =
   | { status: "forbidden" }
   | { status: "conflict"; current: Task };
 
+// --- generic idempotent-outcome cache, reusing idempotency_keys beyond create ---
+//
+// createTaskIdempotent above only covers POST. A retried PATCH/DELETE with the
+// same version can't be made safe the same way version-checking already makes
+// it *correct* (a real resend after the first one committed will now see a
+// version that has moved on, and come back "conflict" instead of replaying the
+// original success) — which is exactly the retry pattern Module 4's sync
+// protocol produces. These two helpers let any write outcome be cached and
+// replayed by an idempotency key (the sync operation id), independent of
+// createTaskIdempotent's create-specific path.
+
+export async function getCachedOutcome(idempotencyKey: string): Promise<WriteOutcome | null> {
+  const rows = await advanceSelect<{ response: WriteOutcome } & QueryResultRow>(
+    IDEMPOTENCY_TABLE,
+    ["response"],
+    { key: idempotencyKey }
+  );
+  return rows[0]?.response ?? null;
+}
+
+async function cacheOutcome(
+  client: PoolClient,
+  idempotencyKey: string,
+  taskId: string,
+  outcome: WriteOutcome
+): Promise<void> {
+  const statusCode = outcome.status === "ok" ? 200 : outcome.status === "conflict" ? 409 : outcome.status === "forbidden" ? 403 : 404;
+  await advanceInsert(
+    IDEMPOTENCY_TABLE,
+    {
+      key: idempotencyKey,
+      task_id: taskId,
+      status_code: statusCode,
+      response: JSON.stringify(outcome),
+    },
+    client
+  );
+}
+
 // PATCH /api/tasks/:id. Rejects with "conflict" if `expectedVersion` doesn't
 // match what's in the DB right now — someone else changed it first — rather than
 // silently overwriting their change.
@@ -332,6 +371,125 @@ export async function softDeleteTaskById(id: string, actor: AuthUser): Promise<W
     await writeTaskEvent(client, id, actor.id, "task.deleted", updated);
 
     return { status: "ok", task: updated };
+  });
+}
+
+// Version-checked delete, for callers (Module 4's sync protocol) that need the
+// same "someone else touched this since I last saw it" detection on delete that
+// updateTaskWithVersion gives PATCH. The plain DELETE /api/tasks/:id route keeps
+// using softDeleteTaskById above — this is additive, not a replacement.
+export async function softDeleteTaskWithVersion(
+  id: string,
+  expectedVersion: number,
+  actor: AuthUser
+): Promise<WriteOutcome> {
+  return withTransaction(async (client) => {
+    const rows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id, deleted_at: null }, client);
+    const current = rows[0] ? rowToTask(rows[0]) : null;
+    if (!current) return { status: "not_found" };
+    if (current.createdById !== actor.id) return { status: "forbidden" };
+    if (current.version !== expectedVersion) return { status: "conflict", current };
+
+    await advanceUpdate(
+      TABLE,
+      { deleted_at: new Date().toISOString(), version: current.version + 1 },
+      { id, version: expectedVersion },
+      client
+    );
+
+    const updatedRows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id }, client);
+    const updated = rowToTask(updatedRows[0]);
+    await writeTaskEvent(client, id, actor.id, "task.deleted", updated);
+
+    return { status: "ok", task: updated };
+  });
+}
+
+// Idempotency-key-aware wrappers around the two versioned writes above, for
+// Module 4: a resent sync operation with the same id replays the original
+// outcome (including a cached "conflict") instead of re-evaluating the version
+// check against state that has since moved on.
+export async function updateTaskWithVersionIdempotent(
+  id: string,
+  expectedVersion: number,
+  input: UpdateTaskInput,
+  actor: AuthUser,
+  idempotencyKey: string
+): Promise<WriteOutcome> {
+  return withTransaction(async (client) => {
+    const existing = await advanceSelect<{ response: WriteOutcome } & QueryResultRow>(
+      IDEMPOTENCY_TABLE,
+      ["response"],
+      { key: idempotencyKey },
+      client
+    );
+    if (existing[0]) return existing[0].response;
+
+    const rows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id, deleted_at: null }, client);
+    const current = rows[0] ? rowToTask(rows[0]) : null;
+
+    let outcome: WriteOutcome;
+    if (!current) {
+      outcome = { status: "not_found" };
+    } else if (current.createdById !== actor.id) {
+      outcome = { status: "forbidden" };
+    } else if (current.version !== expectedVersion) {
+      outcome = { status: "conflict", current };
+    } else {
+      const row = updateInputToRow(input);
+      row.version = current.version + 1;
+      await advanceUpdate(TABLE, row, { id, version: expectedVersion }, client);
+      const updatedRows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id }, client);
+      const updated = rowToTask(updatedRows[0]);
+      await writeTaskEvent(client, id, actor.id, "task.updated", updated);
+      outcome = { status: "ok", task: updated };
+    }
+
+    await cacheOutcome(client, idempotencyKey, id, outcome);
+    return outcome;
+  });
+}
+
+export async function softDeleteTaskWithVersionIdempotent(
+  id: string,
+  expectedVersion: number,
+  actor: AuthUser,
+  idempotencyKey: string
+): Promise<WriteOutcome> {
+  return withTransaction(async (client) => {
+    const existing = await advanceSelect<{ response: WriteOutcome } & QueryResultRow>(
+      IDEMPOTENCY_TABLE,
+      ["response"],
+      { key: idempotencyKey },
+      client
+    );
+    if (existing[0]) return existing[0].response;
+
+    const rows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id, deleted_at: null }, client);
+    const current = rows[0] ? rowToTask(rows[0]) : null;
+
+    let outcome: WriteOutcome;
+    if (!current) {
+      outcome = { status: "not_found" };
+    } else if (current.createdById !== actor.id) {
+      outcome = { status: "forbidden" };
+    } else if (current.version !== expectedVersion) {
+      outcome = { status: "conflict", current };
+    } else {
+      await advanceUpdate(
+        TABLE,
+        { deleted_at: new Date().toISOString(), version: current.version + 1 },
+        { id, version: expectedVersion },
+        client
+      );
+      const updatedRows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id }, client);
+      const updated = rowToTask(updatedRows[0]);
+      await writeTaskEvent(client, id, actor.id, "task.deleted", updated);
+      outcome = { status: "ok", task: updated };
+    }
+
+    await cacheOutcome(client, idempotencyKey, id, outcome);
+    return outcome;
   });
 }
 
