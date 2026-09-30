@@ -249,14 +249,17 @@ export async function createTaskIdempotent(
     return { task: await createTask(input, user), replayed: false };
   }
 
+  const requestHash = hashRequest({ op: "create", input });
+
   return withTransaction(async (client) => {
-    const existing = await advanceSelect<{ response: Task } & QueryResultRow>(
+    const existing = await advanceSelect<{ response: Task; request_hash: string | null } & QueryResultRow>(
       IDEMPOTENCY_TABLE,
-      ["response"],
-      { key: idempotencyKey },
+      ["response", "request_hash"],
+      { user_id: user.id, key: idempotencyKey },
       client
     );
     if (existing[0]) {
+      assertSameRequest(existing[0].request_hash, requestHash);
       return { task: existing[0].response, replayed: true };
     }
 
@@ -269,7 +272,9 @@ export async function createTaskIdempotent(
     await advanceInsert(
       IDEMPOTENCY_TABLE,
       {
+        user_id: user.id,
         key: idempotencyKey,
+        request_hash: requestHash,
         task_id: created.id,
         status_code: 201,
         response: JSON.stringify(created),
@@ -298,7 +303,7 @@ export type WriteOutcome =
 // replayed by an idempotency key (the sync operation id), independent of
 // createTaskIdempotent's create-specific path.
 
-export async function getCachedOutcome(idempotencyKey: string): Promise<WriteOutcome | null> {
+export async function getCachedOutcome(userId: string, idempotencyKey: string): Promise<WriteOutcome | null> {
   const rows = await advanceSelect<{ response: WriteOutcome } & QueryResultRow>(
     IDEMPOTENCY_TABLE,
     ["response"],
@@ -309,7 +314,9 @@ export async function getCachedOutcome(idempotencyKey: string): Promise<WriteOut
 
 async function cacheOutcome(
   client: PoolClient,
+  userId: string,
   idempotencyKey: string,
+  requestHash: string,
   taskId: string,
   outcome: WriteOutcome
 ): Promise<void> {
@@ -317,7 +324,9 @@ async function cacheOutcome(
   await advanceInsert(
     IDEMPOTENCY_TABLE,
     {
+      user_id: userId,
       key: idempotencyKey,
+      request_hash: requestHash,
       task_id: taskId,
       status_code: statusCode,
       response: JSON.stringify(outcome),
@@ -423,14 +432,19 @@ export async function updateTaskWithVersionIdempotent(
   actor: AuthUser,
   idempotencyKey: string
 ): Promise<WriteOutcome> {
+  const requestHash = hashRequest({ op: "update", id, expectedVersion, input });
+
   return withTransaction(async (client) => {
-    const existing = await advanceSelect<{ response: WriteOutcome } & QueryResultRow>(
+    const existing = await advanceSelect<{ response: WriteOutcome; request_hash: string | null } & QueryResultRow>(
       IDEMPOTENCY_TABLE,
-      ["response"],
-      { key: idempotencyKey },
+      ["response", "request_hash"],
+      { user_id: actor.id, key: idempotencyKey },
       client
     );
-    if (existing[0]) return existing[0].response;
+    if (existing[0]) {
+      assertSameRequest(existing[0].request_hash, requestHash);
+      return existing[0].response;
+    }
 
     const rows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id, deleted_at: null }, client);
     const current = rows[0] ? rowToTask(rows[0]) : null;
@@ -452,7 +466,7 @@ export async function updateTaskWithVersionIdempotent(
       outcome = { status: "ok", task: updated };
     }
 
-    await cacheOutcome(client, idempotencyKey, id, outcome);
+    await cacheOutcome(client, actor.id, idempotencyKey, requestHash, id, outcome);
     return outcome;
   });
 }
@@ -463,14 +477,19 @@ export async function softDeleteTaskWithVersionIdempotent(
   actor: AuthUser,
   idempotencyKey: string
 ): Promise<WriteOutcome> {
+  const requestHash = hashRequest({ op: "delete", id, expectedVersion });
+
   return withTransaction(async (client) => {
-    const existing = await advanceSelect<{ response: WriteOutcome } & QueryResultRow>(
+    const existing = await advanceSelect<{ response: WriteOutcome; request_hash: string | null } & QueryResultRow>(
       IDEMPOTENCY_TABLE,
-      ["response"],
-      { key: idempotencyKey },
+      ["response", "request_hash"],
+      { user_id: actor.id, key: idempotencyKey },
       client
     );
-    if (existing[0]) return existing[0].response;
+    if (existing[0]) {
+      assertSameRequest(existing[0].request_hash, requestHash);
+      return existing[0].response;
+    }
 
     const rows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id, deleted_at: null }, client);
     const current = rows[0] ? rowToTask(rows[0]) : null;
@@ -495,11 +514,16 @@ export async function softDeleteTaskWithVersionIdempotent(
       outcome = { status: "ok", task: updated };
     }
 
-    await cacheOutcome(client, idempotencyKey, id, outcome);
+    await cacheOutcome(client, actor.id, idempotencyKey, requestHash, id, outcome);
     return outcome;
   });
 }
 
+// --- bulk paths: authenticated and owner-scoped. Every statement is constrained to
+// rows the caller created (and that aren't tombstoned), so ids belonging to other
+// users are silently skipped rather than touched. Still hard-delete / non-versioned
+// for now; converting these to tombstone + batched background jobs is Module 5's
+// scope (large-delete safety, job queue). ---
 
 export async function updateTasksByIds(ids: string[], input: UpdateTaskInput, userId: string): Promise<number> {
   const row = updateInputToRow(input);

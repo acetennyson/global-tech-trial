@@ -152,3 +152,17 @@ describe("partial batch failure", () => {
     expect(result.accepted).toEqual(["op-8"]);
   });
 });
+
+describe("applySyncBatch: operation id reused with different content", () => {
+  it("rejects it as permanent (retrying the same request can't succeed)", async () => {
+    const { IdempotencyKeyReuseError } = await import("@/lib/idempotency");
+    vi.mocked(repo.updateTaskWithVersionIdempotent).mockRejectedValue(new IdempotencyKeyReuseError());
+
+    const res = await applySyncBatch(
+      [{ id: "op-1", entityId: "t1", entityType: "task", operation: "update", payload: { version: 1, title: "changed" } } as SyncOperationInput],
+      USER
+    );
+
+    expect(res.rejected).toEqual([{ operationId: "op-1", error: expect.any(String), permanent: true }]);
+  });
+});

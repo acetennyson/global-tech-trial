@@ -225,7 +225,7 @@ curl -X POST http://localhost:3000/api/tasks \
 
 `title`, `startTime`, `endTime` required, `endTime` can't be before `startTime`. `parentId`, `description`, `status` (default `todo`), `visible` (default `true`) optional. `id` optional too, a client-generated ULID; the server makes one if you leave it out. Creator always comes from the token's subject, never the body.
 
-`Idempotency-Key` is optional. Lost the connection right after a POST and not sure if it went through? Resend the exact request with the same key and you get the original task back (`200`, not `201`) instead of a duplicate.
+`Idempotency-Key` is optional. Lost the connection right after a POST and not sure if it went through? Resend the exact request with the same key and you get the original task back (`200`, not `201`) instead of a duplicate. Keys are scoped to the authenticated user (stored under `(user_id, key)`), so another account reusing or guessing your key gets nothing back and creates its own task. A key is also bound to the request it was first used with: reusing it with a *different* body returns `422` instead of quietly handing back the first task. The home-page playground sends a fresh key per attempt, so pressing Create twice shows the `200` replay.
 
 ### `PATCH /api/tasks/:id`: update one
 

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { ForbiddenError, UnauthenticatedError } from "./auth";
+import { IdempotencyKeyReuseError } from "./idempotency";
 import { logger } from "./logger";
 
 // Result()/Error() from functions.php, JSON-ified.
@@ -23,6 +24,9 @@ export function toErrorResponse(error: unknown) {
   }
   if (error instanceof ForbiddenError) {
     return fail(403, error.message);
+  }
+  if (error instanceof IdempotencyKeyReuseError) {
+    return fail(422, error.message);
   }
   if (error instanceof SyntaxError) {
     return fail(400, "Malformed JSON body");

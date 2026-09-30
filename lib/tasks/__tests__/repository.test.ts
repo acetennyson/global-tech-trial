@@ -11,6 +11,12 @@ vi.mock("@/lib/db/advanceSQL", () => ({
   advanceDelete: vi.fn(),
 }));
 
+vi.mock("@/lib/db/pool", () => ({
+  getPool: () => ({
+    connect: async () => ({ query: vi.fn().mockResolvedValue({ rows: [] }), release: vi.fn() }),
+  }),
+}));
+
 const advanceSQL = await import("@/lib/db/advanceSQL");
 const { filtersToCondition, listTasks, rowToTask } = await import("../repository");
 
@@ -209,5 +215,82 @@ describe("listTasks", () => {
     expect(result.total).toBeNull();
     expect(result.hasMore).toBe(true); // got a full page, so there may be more
     expect(result.nextCursor).toBe("t102"); // id of the last row
+  });
+});
+
+describe("idempotency keys are scoped per user", () => {
+  it("looks up the stored response by (user_id, key), never by key alone", async () => {
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValueOnce([]); // no stored response for this user
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValueOnce([row("t1")]); // reload after insert
+    vi.mocked(advanceSQL.advanceInsert).mockResolvedValue("t1");
+
+    const { createTaskIdempotent } = await import("../repository");
+    await createTaskIdempotent(
+      { title: "x", status: "todo", visible: true, startTime: "2026-01-01T09:00:00Z", endTime: "2026-01-01T10:00:00Z" } as never,
+      { id: "user-B", name: "Bob" },
+      "shared-key"
+    );
+
+    expect(advanceSQL.advanceSelect).toHaveBeenNthCalledWith(
+      1,
+      "idempotency_keys",
+      ["response"],
+      { user_id: "user-B", key: "shared-key" },
+      expect.anything()
+    );
+    const keyInsert = vi.mocked(advanceSQL.advanceInsert).mock.calls.find(([table]) => table === "idempotency_keys");
+    expect(keyInsert?.[1]).toMatchObject({ user_id: "user-B", key: "shared-key" });
+  });
+
+  it("does not replay another user's stored task for the same key", async () => {
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValue([]); // user-B has no row under this key
+    vi.mocked(advanceSQL.advanceInsert).mockResolvedValue("t2");
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValueOnce([]).mockResolvedValueOnce([row("t2")]);
+
+    const { createTaskIdempotent } = await import("../repository");
+    const res = await createTaskIdempotent(
+      { title: "x", status: "todo", visible: true, startTime: "2026-01-01T09:00:00Z", endTime: "2026-01-01T10:00:00Z" } as never,
+      { id: "user-B", name: "Bob" },
+      "key-owned-by-user-A"
+    );
+    expect(res.replayed).toBe(false);
+  });
+});
+
+describe("idempotency key is bound to the original request", () => {
+  const input = { title: "A", status: "todo", visible: true, startTime: "2026-01-01T09:00:00Z", endTime: "2026-01-01T10:00:00Z" } as never;
+  const user = { id: "user-1", name: "Ada" };
+
+  it("replays the stored task when the same key comes with the same body", async () => {
+    const { hashRequest } = await import("@/lib/idempotency");
+    const { createTaskIdempotent } = await import("../repository");
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValueOnce([
+      { response: rowToTask(row("t1")), request_hash: hashRequest({ op: "create", input }) },
+    ] as never);
+
+    const res = await createTaskIdempotent(input, user, "k1");
+    expect(res.replayed).toBe(true);
+    expect(advanceSQL.advanceInsert).not.toHaveBeenCalled();
+  });
+
+  it("throws IdempotencyKeyReuseError (and creates nothing) when the same key comes with a different body", async () => {
+    const { IdempotencyKeyReuseError } = await import("@/lib/idempotency");
+    const { createTaskIdempotent } = await import("../repository");
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValueOnce([
+      { response: rowToTask(row("t1")), request_hash: "hash-of-a-different-body" },
+    ] as never);
+
+    await expect(createTaskIdempotent(input, user, "k1")).rejects.toBeInstanceOf(IdempotencyKeyReuseError);
+    expect(advanceSQL.advanceInsert).not.toHaveBeenCalled();
+  });
+
+  it("stores the request hash with a newly created key", async () => {
+    const { createTaskIdempotent } = await import("../repository");
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValueOnce([]).mockResolvedValueOnce([row("t9")]);
+    vi.mocked(advanceSQL.advanceInsert).mockResolvedValue("t9");
+
+    await createTaskIdempotent(input, user, "k2");
+    const keyInsert = vi.mocked(advanceSQL.advanceInsert).mock.calls.find(([t]) => t === "idempotency_keys");
+    expect(keyInsert?.[1]).toHaveProperty("request_hash");
   });
 });

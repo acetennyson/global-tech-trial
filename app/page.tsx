@@ -30,6 +30,7 @@ export default function Home() {
             <li><a href="#account" className="hover:text-black">Account</a></li>
             <li><a href="#create" className="hover:text-black">Create</a></li>
             <li><a href="#tasks" className="hover:text-black">Tasks</a></li>
+            <li><a href="#reset" className="hover:text-black">Reset</a></li>
             <li><a href="#health" className="hover:text-black">Health</a></li>
             <li><a href="#reference" className="hover:text-black">Reference</a></li>
           </ul>

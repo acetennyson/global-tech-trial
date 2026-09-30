@@ -4,6 +4,7 @@ import {
   softDeleteTaskWithVersionIdempotent,
   updateTaskWithVersionIdempotent,
 } from "@/lib/tasks/repository";
+import { IdempotencyKeyReuseError } from "@/lib/idempotency";
 import type { Task } from "@/lib/types";
 import type { SyncOperationInput } from "./validation";
 
@@ -47,6 +48,11 @@ export async function applySyncBatch(operations: SyncOperationInput[], user: Aut
         }
       }
     } catch (error) {
+      if (error instanceof IdempotencyKeyReuseError) {
+        // Same operation id, different content: retrying the identical request can't fix it.
+        result.rejected.push({ operationId: op.id, error: error.message, permanent: true });
+        continue;
+      }
       // Anything unexpected (DB error, etc.) is treated as transient — the
       // client's backoff will retry it, per spec: "server unavailable -> retry".
       result.rejected.push({

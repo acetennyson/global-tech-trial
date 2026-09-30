@@ -116,6 +116,21 @@ describe("POST /api/tasks", () => {
     expect(repo.createTaskIdempotent).toHaveBeenCalledWith(expect.anything(), expect.anything(), "abc-123");
   });
 
+  it("returns 422 when the Idempotency-Key was already used with a different body", async () => {
+    const { IdempotencyKeyReuseError } = await import("@/lib/idempotency");
+    vi.mocked(repo.createTaskIdempotent).mockRejectedValue(new IdempotencyKeyReuseError());
+
+    const res = await POST(
+      new Request("http://localhost/api/tasks", {
+        method: "POST",
+        headers: { "content-type": "application/json", "idempotency-key": "abc-123", ...authHeaders },
+        body: JSON.stringify(validBody),
+      })
+    );
+
+    expect(res.status).toBe(422);
+  });
+
   it("returns 401 when no auth header is present", async () => {
     const res = await POST(
       new Request("http://localhost/api/tasks", {

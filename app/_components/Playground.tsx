@@ -6,9 +6,9 @@ import { useState, useSyncExternalStore, type ReactNode } from "react";
 
 type Call = { method: string; path: string; status: number; ms: number; body: unknown };
 
-async function api(method: string, path: string, token: string | null, payload?: unknown): Promise<Call> {
+async function api(method: string, path: string, token: string | null, payload?: unknown, extraHeaders?: Record<string, string>): Promise<Call> {
   const t0 = performance.now();
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...extraHeaders };
   if (payload !== undefined) headers["content-type"] = "application/json";
   if (token) headers.authorization = `Bearer ${token}`;
   try {
@@ -27,9 +27,9 @@ async function api(method: string, path: string, token: string | null, payload?:
 function useCall(token: string | null) {
   const [result, setResult] = useState<Call | null>(null);
   const [loading, setLoading] = useState(false);
-  async function run(method: string, path: string, payload?: unknown) {
+  async function run(method: string, path: string, payload?: unknown, extraHeaders?: Record<string, string>) {
     setLoading(true);
-    const r = await api(method, path, token, payload);
+    const r = await api(method, path, token, payload, extraHeaders);
     setResult(r);
     setLoading(false);
     return r;
@@ -180,13 +180,24 @@ function CreateTaskForm({ token }: { token: string | null }) {
   const [end, setEnd] = useState(() => toLocalInput(new Date(new Date().getTime() + 3600_000)));
   const { result, loading, run } = useCall(token);
 
-  function submit(e: React.FormEvent) {
+  // One key per "attempt". Pressing Create again without changing anything replays the
+  // same key, so the API returns the original task (200) instead of a duplicate (201).
+  // The key is renewed once a task is actually created.
+  const [idemKey, setIdemKey] = useState(() => crypto.randomUUID());
+
+  async function submit(e: React.FormEvent) {
     e.preventDefault();
-    run("POST", "/api/tasks", {
-      title, status, visible,
-      ...(description.trim() ? { description } : {}),
-      startTime: toIso(start), endTime: toIso(end),
-    });
+    const r = await run(
+      "POST",
+      "/api/tasks",
+      {
+        title, status, visible,
+        ...(description.trim() ? { description } : {}),
+        startTime: toIso(start), endTime: toIso(end),
+      },
+      { "idempotency-key": idemKey }
+    );
+    if (r.status === 201) setIdemKey(crypto.randomUUID());
   }
 
   return (
@@ -282,6 +293,31 @@ function Tasks({ token }: { token: string | null }) {
   );
 }
 
+function ResetPassword() {
+  const [email, setEmail] = useState("");
+  const [token, setToken] = useState("");
+  const [password, setPassword] = useState("");
+  const { result, loading, run } = useCall(null); // one panel shows whichever request ran last
+
+  return (
+    <Section id="reset" tone="light" title="Forgot your password?" sub="Request a reset email, then paste the token from its link (the part after ?token=) to set a new password. Tokens are single-use and expire.">
+      <FormCard>
+        <form onSubmit={(e) => { e.preventDefault(); run("POST", "/api/auth/forgot-password", { email }); }} className="flex flex-col gap-4">
+          <Field label="Email"><input className={inputCls} type="email" autoComplete="email" placeholder="ada@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required /></Field>
+          <div><Button type="submit" loading={loading}>Send reset email</Button></div>
+        </form>
+        <hr className="border-[var(--line)]" />
+        <form onSubmit={(e) => { e.preventDefault(); run("POST", "/api/auth/reset-password", { token, password }); }} className="flex flex-col gap-4">
+          <Field label="Reset token"><input className={inputCls} placeholder="Paste token from the email link" value={token} onChange={(e) => setToken(e.target.value)} required /></Field>
+          <Field label="New password"><input className={inputCls} type="password" autoComplete="new-password" placeholder="At least 8 characters" value={password} onChange={(e) => setPassword(e.target.value)} required /></Field>
+          <div><Button type="submit" loading={loading}>Set new password</Button></div>
+        </form>
+      </FormCard>
+      <ResultPanel call={result} loading={loading} />
+    </Section>
+  );
+}
+
 function Health() {
   const { result, loading, run } = useCall(null);
   return (
@@ -313,6 +349,7 @@ export default function Playground() {
       <Account token={token} onAuth={(t, w) => { setToken(t); setWho(w); }} />
       <CreateTask token={token} />
       <Tasks token={token} />
+      <ResetPassword />
       <Health />
     </>
   );

@@ -93,13 +93,39 @@ CREATE TABLE IF NOT EXISTS task_events (
 CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events (task_id);
 CREATE INDEX IF NOT EXISTS idx_task_events_created_at ON task_events (created_at);
 
--- Dedupe retried POST /api/tasks requests. A response is stored once per key and
--- replayed verbatim on every retry with the same key, instead of creating a
--- second task.
+-- Dedupe retried writes. A response is stored once per (user, key) and replayed
+-- verbatim on every retry with the same key by the same user. Keys are scoped per
+-- user so one user can never read back another user's stored response.
 CREATE TABLE IF NOT EXISTS idempotency_keys (
-  key TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  key TEXT NOT NULL,
+  request_hash TEXT,
   task_id TEXT NOT NULL,
   status_code INTEGER NOT NULL,
   response JSONB NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, key)
 );
+
+-- Upgrade path for databases created before keys were per-user (global PK on key).
+-- Rows are a retry cache, so anything that can't be attributed to a user is dropped.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'idempotency_keys' AND column_name = 'user_id'
+  ) THEN
+    ALTER TABLE idempotency_keys ADD COLUMN user_id TEXT;
+    UPDATE idempotency_keys k SET user_id = t.created_by_id
+      FROM tasks t WHERE t.id = k.task_id;
+    DELETE FROM idempotency_keys WHERE user_id IS NULL;
+    ALTER TABLE idempotency_keys ALTER COLUMN user_id SET NOT NULL;
+    ALTER TABLE idempotency_keys DROP CONSTRAINT IF EXISTS idempotency_keys_pkey;
+    ALTER TABLE idempotency_keys ADD PRIMARY KEY (user_id, key);
+  END IF;
+END $$;
+
+-- Binds a key to the request it was first used with (sha256 of the canonical input),
+-- so reusing the key with a different body is rejected. NULL on rows written before
+-- this existed; those are accepted as a match.
+ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS request_hash TEXT;
