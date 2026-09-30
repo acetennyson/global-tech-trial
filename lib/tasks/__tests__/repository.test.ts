@@ -234,7 +234,7 @@ describe("idempotency keys are scoped per user", () => {
     expect(advanceSQL.advanceSelect).toHaveBeenNthCalledWith(
       1,
       "idempotency_keys",
-      ["response"],
+      ["response", "request_hash"],
       { user_id: "user-B", key: "shared-key" },
       expect.anything()
     );
