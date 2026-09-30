@@ -12,8 +12,8 @@
     "db:migrate": "node --import tsx lib/db/migrate.ts"
   },
   "dependencies": {
-    "mysql2": "^3.15.2",
     "next": "16.3.6",
+    "pg": "^8.13.1",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "zod": "^4.1.13"
@@ -21,6 +21,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/pg": "^8.11.10",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",

@@ -12,6 +12,13 @@ export class UnauthenticatedError extends Error {
   }
 }
 
+export class ForbiddenError extends Error {
+  constructor(message = "Not allowed to perform this action") {
+    super(message);
+    this.name = "ForbiddenError";
+  }
+}
+
 export function resolveAuthUser(request: Request): AuthUser {
   const id = request.headers.get("x-user-id")?.trim();
   const name = request.headers.get("x-user-name")?.trim();

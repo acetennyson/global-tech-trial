@@ -17,6 +17,10 @@ export interface ConditionModifiers {
   __BETWEEN?: Record<string, [unknown, unknown]>;
   __IN?: Record<string, unknown[]>;
   __SEARCH?: { columns: string[]; term: string };
+  // Simple two-or-more-branch OR of plain equality conditions, ANDed with everything
+  // else. Each branch is `{ column: value }` pairs only (no nested modifiers) — enough
+  // for "visible OR own row" style authorization checks without a general query DSL.
+  __OR?: Record<string, unknown>[];
   __ORDERBY?: string | SortSpec[];
   __ASC?: boolean;
   __LIMIT?: number;
@@ -31,6 +35,7 @@ const MODIFIER_KEYS = new Set([
   "__BETWEEN",
   "__IN",
   "__SEARCH",
+  "__OR",
   "__ORDERBY",
   "__ASC",
   "__LIMIT",
@@ -52,7 +57,7 @@ export function buildWhere(condition: Condition = {}): {
   const clauses: string[] = [];
   const params: unknown[] = [];
 
-  const { __GREATER, __LESSER, __BETWEEN, __IN, __SEARCH, __ORDERBY, __ASC, __LIMIT, __OFFSET } =
+  const { __GREATER, __LESSER, __BETWEEN, __IN, __SEARCH, __OR, __ORDERBY, __ASC, __LIMIT, __OFFSET } =
     condition;
 
   if (__GREATER) {
@@ -101,6 +106,23 @@ export function buildWhere(condition: Condition = {}): {
       clauses.push(`(${searchClauses.join(" OR ")})`);
       searchClauses.forEach(() => params.push(`%${__SEARCH.term}%`));
     }
+  }
+
+  if (__OR && __OR.length) {
+    const branches = __OR.map((branch) => {
+      const branchClauses: string[] = [];
+      for (const [key, value] of Object.entries(branch)) {
+        assertSafeIdentifier(key);
+        if (value === null || value === undefined) {
+          branchClauses.push(`${key} IS NULL`);
+        } else {
+          branchClauses.push(`${key} = ?`);
+          params.push(value);
+        }
+      }
+      return branchClauses.join(" AND ");
+    });
+    clauses.push(`(${branches.join(" OR ")})`);
   }
 
   for (const [column, value] of Object.entries(condition)) {

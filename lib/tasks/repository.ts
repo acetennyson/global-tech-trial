@@ -1,20 +1,18 @@
-import type { RowDataPacket } from "mysql2/promise";
-import {
-  advanceCount,
-  advanceDelete,
-  advanceDeleteAll,
-  advanceInsert,
-  advanceSelect,
-  advanceUpdate,
-} from "@/lib/db/advanceSQL";
+import type { PoolClient, QueryResultRow } from "pg";
+import { getPool } from "@/lib/db/pool";
+import { advanceCount, advanceInsert, advanceSelect, advanceUpdate, advanceDelete, advanceDeleteAll } from "@/lib/db/advanceSQL";
 import type { Condition } from "@/lib/db/queryBuilder";
+import { generateId } from "@/lib/db/id";
 import type { AuthUser } from "@/lib/auth";
 import type { CreateTaskInput, Task, TaskRow, UpdateTaskInput } from "@/lib/types";
 import type { SortableField, TaskFiltersInput } from "@/lib/validation/task";
 
 const TABLE = "tasks";
+const EVENTS_TABLE = "task_events";
+const IDEMPOTENCY_TABLE = "idempotency_keys";
 
-type TaskRowPacket = TaskRow & RowDataPacket;
+type TaskRowPacket = TaskRow & QueryResultRow;
+type TaskEventType = "task.created" | "task.updated" | "task.deleted";
 
 // snake_case -> camelCase. only place that knows it.
 export function rowToTask(row: TaskRow): Task {
@@ -31,11 +29,16 @@ export function rowToTask(row: TaskRow): Task {
     createdByName: row.created_by_name,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+    version: Number(row.version),
+    deletedAt: row.deleted_at === null ? null : String(row.deleted_at),
   };
 }
 
 function createInputToRow(input: CreateTaskInput, user: AuthUser): Record<string, unknown> {
   return {
+    // offline-created tasks bring their own id so they can keep it after sync;
+    // anything else gets a server-generated ULID.
+    id: input.id ?? generateId(),
     parent_id: input.parentId ?? null,
     title: input.title,
     description: input.description ?? null,
@@ -70,9 +73,18 @@ const SORT_FIELD_TO_COLUMN: Record<SortableField, string> = {
   updatedAt: "updated_at",
 };
 
-// filters -> Condition
-export function filtersToCondition(filters: TaskFiltersInput): Condition {
+// filters -> Condition. `viewerId`, when given, scopes results to what that user
+// is allowed to see: their own tasks, plus everyone's visible ones.
+export function filtersToCondition(filters: TaskFiltersInput, viewerId?: string): Condition {
   const condition: Condition = {};
+
+  // Tombstoned tasks never show up on the normal read path. Sync (Module 4) reads
+  // task_events directly, which is how a deleted task still propagates to clients.
+  condition.deleted_at = null;
+
+  if (viewerId) {
+    condition.__OR = [{ visible: true }, { created_by_id: viewerId }];
+  }
 
   if (filters.id?.length) condition.__IN = { ...condition.__IN, id: filters.id };
   if (filters.status?.length) condition.__IN = { ...condition.__IN, status: filters.status };
@@ -94,7 +106,8 @@ export function filtersToCondition(filters: TaskFiltersInput): Condition {
   }
 
   if (filters.cursor !== undefined) {
-    // keyset, not offset. see README.
+    // keyset, not offset. ULIDs sort lexicographically by creation time, so a
+    // plain string comparison on id still gives the right order. see README.
     condition.__GREATER = { ...condition.__GREATER, id: filters.cursor };
     condition.__ORDERBY = [{ column: "id", asc: true }];
     condition.__LIMIT = filters.limit;
@@ -115,11 +128,11 @@ export interface TaskPage {
   totalPages: number | null; // null in cursor mode
   total: number | null; // null in cursor mode, no free COUNT(*)
   hasMore: boolean;
-  nextCursor: number | null; // set only in cursor mode
+  nextCursor: string | null; // set only in cursor mode
 }
 
-export async function listTasks(filters: TaskFiltersInput): Promise<TaskPage> {
-  const condition = filtersToCondition(filters);
+export async function listTasks(filters: TaskFiltersInput, viewerId?: string): Promise<TaskPage> {
+  const condition = filtersToCondition(filters, viewerId);
   const items = (await advanceSelect<TaskRowPacket>(TABLE, "*", condition)).map(rowToTask);
 
   if (filters.cursor !== undefined) {
@@ -149,37 +162,190 @@ export async function listTasks(filters: TaskFiltersInput): Promise<TaskPage> {
   };
 }
 
-export async function getTaskById(id: number): Promise<Task | null> {
-  const rows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id });
+// Tombstoned tasks 404 here, same as a task that never existed — a client has no
+// way to tell the two apart through this call, by design.
+export async function getTaskById(id: string): Promise<Task | null> {
+  const rows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id, deleted_at: null });
   return rows[0] ? rowToTask(rows[0]) : null;
 }
 
+// --- transactions: every write below pairs a `tasks` mutation with a
+// `task_events` row, committed or rolled back together. ---
+
+async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function writeTaskEvent(
+  client: PoolClient,
+  taskId: string,
+  actorId: string | null,
+  eventType: TaskEventType,
+  payload: unknown
+): Promise<void> {
+  await advanceInsert(
+    EVENTS_TABLE,
+    {
+      id: generateId(),
+      task_id: taskId,
+      actor_id: actorId,
+      event_type: eventType,
+      payload: JSON.stringify(payload),
+    },
+    client
+  );
+}
+
 export async function createTask(input: CreateTaskInput, user: AuthUser): Promise<Task> {
-  const id = await advanceInsert(TABLE, createInputToRow(input, user));
-  const created = await getTaskById(id);
-  if (!created) throw new Error("Failed to load task immediately after insert");
-  return created;
+  return withTransaction(async (client) => {
+    const id = await advanceInsert(TABLE, createInputToRow(input, user), client);
+    const rows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id }, client);
+    const created = rows[0] ? rowToTask(rows[0]) : null;
+    if (!created) throw new Error("Failed to load task immediately after insert");
+    await writeTaskEvent(client, created.id, user.id, "task.created", created);
+    return created;
+  });
 }
 
-export async function updateTaskById(id: number, input: UpdateTaskInput): Promise<Task | null> {
-  const row = updateInputToRow(input);
-  if (Object.keys(row).length === 0) return getTaskById(id);
-  await advanceUpdate(TABLE, row, { id });
-  return getTaskById(id);
+export interface IdempotentCreateResult {
+  task: Task;
+  /** true if this request replayed a previous response instead of creating anything. */
+  replayed: boolean;
 }
 
-export async function updateTasksByIds(ids: number[], input: UpdateTaskInput): Promise<number> {
+// POST /api/tasks with an Idempotency-Key: the first request with a given key
+// creates the task and stores its response; every later request with the same
+// key gets that stored response back, verbatim, and creates nothing.
+//
+// Known gap: two requests with the same brand-new key, at the exact same time,
+// can both pass the "not seen yet" check before either commits — the second
+// commit then fails on the idempotency_keys primary key. Left as a rare-edge-case
+// 500 rather than added retry complexity here; a client-side retry on that key
+// succeeds via the now-stored row.
+export async function createTaskIdempotent(
+  input: CreateTaskInput,
+  user: AuthUser,
+  idempotencyKey?: string
+): Promise<IdempotentCreateResult> {
+  if (!idempotencyKey) {
+    return { task: await createTask(input, user), replayed: false };
+  }
+
+  return withTransaction(async (client) => {
+    const existing = await advanceSelect<{ response: Task } & QueryResultRow>(
+      IDEMPOTENCY_TABLE,
+      ["response"],
+      { key: idempotencyKey },
+      client
+    );
+    if (existing[0]) {
+      return { task: existing[0].response, replayed: true };
+    }
+
+    const id = await advanceInsert(TABLE, createInputToRow(input, user), client);
+    const rows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id }, client);
+    const created = rows[0] ? rowToTask(rows[0]) : null;
+    if (!created) throw new Error("Failed to load task immediately after insert");
+
+    await writeTaskEvent(client, created.id, user.id, "task.created", created);
+    await advanceInsert(
+      IDEMPOTENCY_TABLE,
+      {
+        key: idempotencyKey,
+        task_id: created.id,
+        status_code: 201,
+        response: JSON.stringify(created),
+      },
+      client
+    );
+
+    return { task: created, replayed: false };
+  });
+}
+
+export type WriteOutcome =
+  | { status: "ok"; task: Task }
+  | { status: "not_found" }
+  | { status: "forbidden" }
+  | { status: "conflict"; current: Task };
+
+// PATCH /api/tasks/:id. Rejects with "conflict" if `expectedVersion` doesn't
+// match what's in the DB right now — someone else changed it first — rather than
+// silently overwriting their change.
+export async function updateTaskWithVersion(
+  id: string,
+  expectedVersion: number,
+  input: UpdateTaskInput,
+  actor: AuthUser
+): Promise<WriteOutcome> {
+  return withTransaction(async (client) => {
+    const rows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id, deleted_at: null }, client);
+    const current = rows[0] ? rowToTask(rows[0]) : null;
+    if (!current) return { status: "not_found" };
+    if (current.createdById !== actor.id) return { status: "forbidden" };
+    if (current.version !== expectedVersion) return { status: "conflict", current };
+
+    const row = updateInputToRow(input);
+    row.version = current.version + 1;
+    // WHERE id AND version, belt-and-braces against a write racing in between
+    // the read above and this update.
+    await advanceUpdate(TABLE, row, { id, version: expectedVersion }, client);
+
+    const updatedRows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id }, client);
+    const updated = rowToTask(updatedRows[0]);
+    await writeTaskEvent(client, id, actor.id, "task.updated", updated);
+
+    return { status: "ok", task: updated };
+  });
+}
+
+// DELETE /api/tasks/:id. Sets `deleted_at` instead of removing the row — the
+// tombstone is what lets an offline client (Module 3/4) find out a task it has
+// locally was deleted elsewhere.
+export async function softDeleteTaskById(id: string, actor: AuthUser): Promise<WriteOutcome> {
+  return withTransaction(async (client) => {
+    const rows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id, deleted_at: null }, client);
+    const current = rows[0] ? rowToTask(rows[0]) : null;
+    if (!current) return { status: "not_found" };
+    if (current.createdById !== actor.id) return { status: "forbidden" };
+
+    await advanceUpdate(
+      TABLE,
+      { deleted_at: new Date().toISOString(), version: current.version + 1 },
+      { id },
+      client
+    );
+
+    const updatedRows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id }, client);
+    const updated = rowToTask(updatedRows[0]);
+    await writeTaskEvent(client, id, actor.id, "task.deleted", updated);
+
+    return { status: "ok", task: updated };
+  });
+}
+
+// --- bulk paths: still hard-delete / non-versioned for now. Converting these to
+// tombstone + batched background jobs is Module 5's scope (large-delete safety,
+// job queue), not this module's. ---
+
+export async function updateTasksByIds(ids: string[], input: UpdateTaskInput): Promise<number> {
   const row = updateInputToRow(input);
   if (ids.length === 0 || Object.keys(row).length === 0) return 0;
   return advanceUpdate(TABLE, row, { __IN: { id: ids } });
 }
 
-export async function deleteTaskById(id: number): Promise<boolean> {
-  const affected = await advanceDelete(TABLE, { id });
-  return affected > 0;
-}
-
-export async function deleteTasksByIds(ids: number[]): Promise<number> {
+export async function deleteTasksByIds(ids: string[]): Promise<number> {
   if (ids.length === 0) return 0;
   return advanceDelete(TABLE, { __IN: { id: ids } });
 }

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
-import { UnauthenticatedError } from "./auth";
+import { ForbiddenError, UnauthenticatedError } from "./auth";
 
 // Result()/Error() from functions.php, JSON-ified.
 
@@ -19,6 +19,9 @@ export function toErrorResponse(error: unknown) {
   }
   if (error instanceof UnauthenticatedError) {
     return fail(401, error.message);
+  }
+  if (error instanceof ForbiddenError) {
+    return fail(403, error.message);
   }
   if (error instanceof SyntaxError) {
     return fail(400, "Malformed JSON body");

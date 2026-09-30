@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bulkDeleteSchema, createTaskSchema, taskFiltersSchema, updateTaskSchema } from "../task";
+import { bulkDeleteSchema, createTaskSchema, patchTaskSchema, taskFiltersSchema, updateTaskSchema } from "../task";
 
 describe("createTaskSchema", () => {
   const base = { title: "Write tests", startTime: "2026-01-01T09:00:00Z", endTime: "2026-01-01T17:00:00Z" };
@@ -34,6 +34,20 @@ describe("updateTaskSchema", () => {
   });
 });
 
+describe("patchTaskSchema", () => {
+  it("requires version even when a field is provided", () => {
+    expect(() => patchTaskSchema.parse({ status: "done" })).toThrow(/version/i);
+  });
+
+  it("rejects a version-only patch with no actual field to change", () => {
+    expect(() => patchTaskSchema.parse({ version: 1 })).toThrow(/at least one field/i);
+  });
+
+  it("accepts a field plus version", () => {
+    expect(patchTaskSchema.parse({ status: "done", version: 3 })).toEqual({ status: "done", version: 3 });
+  });
+});
+
 describe("bulkDeleteSchema", () => {
   it("accepts { all: true } with no ids", () => {
     expect(bulkDeleteSchema.parse({ all: true })).toMatchObject({ all: true });
@@ -46,8 +60,8 @@ describe("bulkDeleteSchema", () => {
 
 describe("taskFiltersSchema", () => {
   it("parses comma-separated id/status lists from query strings", () => {
-    const result = taskFiltersSchema.parse({ id: "1,2,3", status: "todo,done" });
-    expect(result.id).toEqual([1, 2, 3]);
+    const result = taskFiltersSchema.parse({ id: "t1,t2,t3", status: "todo,done" });
+    expect(result.id).toEqual(["t1", "t2", "t3"]);
     expect(result.status).toEqual(["todo", "done"]);
   });
 

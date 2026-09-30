@@ -4,7 +4,7 @@ import type { TaskPage } from "@/lib/tasks/repository";
 
 vi.mock("@/lib/tasks/repository", () => ({
   listTasks: vi.fn(),
-  createTask: vi.fn(),
+  createTaskIdempotent: vi.fn(),
   updateTasksByIds: vi.fn(),
   deleteTasksByIds: vi.fn(),
   deleteAllTasks: vi.fn(),
@@ -13,8 +13,10 @@ vi.mock("@/lib/tasks/repository", () => ({
 const repo = await import("@/lib/tasks/repository");
 const { GET, POST, PATCH, DELETE } = await import("../route");
 
+const authHeaders = { "x-user-id": "user-1", "x-user-name": "Ada" };
+
 const sampleTask: Task = {
-  id: 1,
+  id: "01K8XR2QC0J8Z6Y8YB2S3D5N9V",
   parentId: null,
   title: "Ship it",
   description: null,
@@ -26,6 +28,8 @@ const sampleTask: Task = {
   createdByName: "Ada",
   createdAt: "2026-01-01T08:00:00.000Z",
   updatedAt: "2026-01-01T08:00:00.000Z",
+  version: 1,
+  deletedAt: null,
 };
 
 beforeEach(() => {
@@ -44,19 +48,29 @@ const samplePage: TaskPage = {
 };
 
 describe("GET /api/tasks", () => {
-  it("lists tasks using filters parsed from the query string", async () => {
+  it("lists tasks using filters parsed from the query string, scoped to the caller", async () => {
     vi.mocked(repo.listTasks).mockResolvedValue(samplePage);
 
-    const res = await GET(new Request("http://localhost/api/tasks?status=todo&limit=10"));
+    const res = await GET(
+      new Request("http://localhost/api/tasks?status=todo&limit=10", { headers: authHeaders })
+    );
     const body = await res.json();
 
     expect(res.status).toBe(200);
     expect(body.data.items).toEqual([sampleTask]);
-    expect(repo.listTasks).toHaveBeenCalledWith(expect.objectContaining({ status: ["todo"], limit: 10 }));
+    expect(repo.listTasks).toHaveBeenCalledWith(expect.objectContaining({ status: ["todo"], limit: 10 }), "user-1");
+  });
+
+  it("returns 401 when no auth header is present", async () => {
+    const res = await GET(new Request("http://localhost/api/tasks"));
+    expect(res.status).toBe(401);
+    expect(repo.listTasks).not.toHaveBeenCalled();
   });
 
   it("returns 400 for an invalid filter value", async () => {
-    const res = await GET(new Request("http://localhost/api/tasks?status=not-a-status"));
+    const res = await GET(
+      new Request("http://localhost/api/tasks?status=not-a-status", { headers: authHeaders })
+    );
     expect(res.status).toBe(400);
     expect(repo.listTasks).not.toHaveBeenCalled();
   });
@@ -66,12 +80,12 @@ describe("POST /api/tasks", () => {
   const validBody = { title: "Ship it", startTime: "2026-01-01T09:00:00Z", endTime: "2026-01-01T17:00:00Z" };
 
   it("creates a task using the auth-resolved creator, not client input", async () => {
-    vi.mocked(repo.createTask).mockResolvedValue(sampleTask);
+    vi.mocked(repo.createTaskIdempotent).mockResolvedValue({ task: sampleTask, replayed: false });
 
     const res = await POST(
       new Request("http://localhost/api/tasks", {
         method: "POST",
-        headers: { "content-type": "application/json", "x-user-id": "user-1", "x-user-name": "Ada" },
+        headers: { "content-type": "application/json", ...authHeaders },
         body: JSON.stringify({ ...validBody, createdById: "someone-else" }),
       })
     );
@@ -79,10 +93,26 @@ describe("POST /api/tasks", () => {
 
     expect(res.status).toBe(201);
     expect(body.data).toEqual(sampleTask);
-    expect(repo.createTask).toHaveBeenCalledWith(expect.objectContaining({ title: "Ship it" }), {
-      id: "user-1",
-      name: "Ada",
-    });
+    expect(repo.createTaskIdempotent).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Ship it" }),
+      { id: "user-1", name: "Ada" },
+      undefined
+    );
+  });
+
+  it("passes the Idempotency-Key header through, and returns 200 (not 201) on replay", async () => {
+    vi.mocked(repo.createTaskIdempotent).mockResolvedValue({ task: sampleTask, replayed: true });
+
+    const res = await POST(
+      new Request("http://localhost/api/tasks", {
+        method: "POST",
+        headers: { "content-type": "application/json", "idempotency-key": "abc-123", ...authHeaders },
+        body: JSON.stringify(validBody),
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect(repo.createTaskIdempotent).toHaveBeenCalledWith(expect.anything(), expect.anything(), "abc-123");
   });
 
   it("returns 401 when no auth header is present", async () => {
@@ -94,7 +124,7 @@ describe("POST /api/tasks", () => {
       })
     );
     expect(res.status).toBe(401);
-    expect(repo.createTask).not.toHaveBeenCalled();
+    expect(repo.createTaskIdempotent).not.toHaveBeenCalled();
   });
 });
 
@@ -106,14 +136,14 @@ describe("PATCH /api/tasks (bulk)", () => {
       new Request("http://localhost/api/tasks", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids: [1, 2, 3], data: { status: "done" } }),
+        body: JSON.stringify({ ids: ["t1", "t2", "t3"], data: { status: "done" } }),
       })
     );
     const body = await res.json();
 
     expect(res.status).toBe(200);
     expect(body.data.affected).toBe(3);
-    expect(repo.updateTasksByIds).toHaveBeenCalledWith([1, 2, 3], { status: "done" });
+    expect(repo.updateTasksByIds).toHaveBeenCalledWith(["t1", "t2", "t3"], { status: "done" });
   });
 });
 
@@ -125,7 +155,7 @@ describe("DELETE /api/tasks (bulk)", () => {
       new Request("http://localhost/api/tasks", {
         method: "DELETE",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids: [1, 2] }),
+        body: JSON.stringify({ ids: ["t1", "t2"] }),
       })
     );
     const body = await res.json();

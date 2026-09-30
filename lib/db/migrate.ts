@@ -7,7 +7,7 @@ async function migrate() {
   const sql = readFileSync(path.join(__dirname, "schema.sql"), "utf8");
   const pool = getPool();
   await pool.query(sql);
-  console.log("Schema applied.");
+  console.log("Schema applied to Supabase Postgres.");
   await pool.end();
 }
 

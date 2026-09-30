@@ -54,6 +54,15 @@ describe("buildSelectQuery", () => {
     expect(sql).toBe("SELECT * FROM tasks ORDER BY status ASC, start_time DESC");
   });
 
+  it("combines an __OR of equality branches with the rest of the condition via AND", () => {
+    const { sql, params } = buildSelectQuery("tasks", "*", {
+      deleted_at: null,
+      __OR: [{ visible: true }, { created_by_id: "user-1" }],
+    });
+    expect(sql).toBe("SELECT * FROM tasks WHERE (visible = ? OR created_by_id = ?) AND deleted_at IS NULL");
+    expect(params).toEqual([true, "user-1"]);
+  });
+
   it("rejects identifiers that aren't safe SQL names", () => {
     expect(() => buildSelectQuery("tasks; DROP TABLE tasks", "*", {})).toThrow(/Unsafe SQL identifier/);
     expect(() => buildSelectQuery("tasks", "*", { "id = 1 OR 1=1": "x" })).toThrow(/Unsafe SQL identifier/);

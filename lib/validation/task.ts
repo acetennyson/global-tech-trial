@@ -7,7 +7,8 @@ const isoDateTime = z
 
 const statusSchema = z.enum(TASK_STATUSES);
 
-const positiveInt = z.coerce.number().int().positive();
+// task ids are now client- or server-generated ULID/UUID strings, not DB auto-increment ints.
+const idString = z.string().trim().min(1, "id must be a non-empty string");
 
 function withTimeOrder<T extends { startTime?: string; endTime?: string }>(value: T, ctx: z.RefinementCtx) {
   if (value.startTime && value.endTime && Date.parse(value.endTime) < Date.parse(value.startTime)) {
@@ -21,7 +22,9 @@ function withTimeOrder<T extends { startTime?: string; endTime?: string }>(value
 
 export const createTaskSchema = z
   .object({
-    parentId: positiveInt.nullish(),
+    // client-supplied stable id for offline-created tasks; server generates one if omitted.
+    id: idString.optional(),
+    parentId: idString.nullish(),
     title: z.string().trim().min(1, "title is required").max(255),
     description: z.string().trim().max(5000).nullish(),
     status: statusSchema.default("todo"),
@@ -31,27 +34,44 @@ export const createTaskSchema = z
   })
   .superRefine(withTimeOrder);
 
+// shared by updateTaskSchema (bulk PATCH, no version) and patchTaskSchema
+// (single-item PATCH, version required) so the two field sets can't drift apart.
+const updateFieldsShape = {
+  parentId: idString.nullish(),
+  title: z.string().trim().min(1).max(255).optional(),
+  description: z.string().trim().max(5000).nullish(),
+  status: statusSchema.optional(),
+  visible: z.boolean().optional(),
+  startTime: isoDateTime.optional(),
+  endTime: isoDateTime.optional(),
+};
+
 export const updateTaskSchema = z
-  .object({
-    parentId: positiveInt.nullish(),
-    title: z.string().trim().min(1).max(255).optional(),
-    description: z.string().trim().max(5000).nullish(),
-    status: statusSchema.optional(),
-    visible: z.boolean().optional(),
-    startTime: isoDateTime.optional(),
-    endTime: isoDateTime.optional(),
-  })
+  .object(updateFieldsShape)
   .superRefine(withTimeOrder)
   .refine((value) => Object.keys(value).length > 0, { message: "At least one field must be provided" });
 
+// PATCH /api/tasks/:id body: same fields, plus the version the client last saw.
+// A stale version means someone else (or another device) changed the task since,
+// and the request is rejected with 409 rather than silently overwritten.
+export const patchTaskSchema = z
+  .object({
+    ...updateFieldsShape,
+    version: z.coerce.number().int().positive({ message: "version is required" }),
+  })
+  .superRefine(withTimeOrder)
+  .refine((value) => Object.keys(value).some((k) => k !== "version"), {
+    message: "At least one field besides version must be provided",
+  });
+
 export const bulkUpdateSchema = z.object({
-  ids: z.array(positiveInt).min(1, "ids must contain at least one id"),
+  ids: z.array(idString).min(1, "ids must contain at least one id"),
   data: updateTaskSchema,
 });
 
 export const bulkDeleteSchema = z
   .object({
-    ids: z.array(positiveInt).min(1).optional(),
+    ids: z.array(idString).min(1).optional(),
     all: z.boolean().optional(),
   })
   .refine((value) => (value.all ? true : !!value.ids?.length), {
@@ -65,10 +85,10 @@ function splitCsv(value: string): string[] {
     .filter(Boolean);
 }
 
-const csvNumbers = z.string().transform((value, ctx) => {
-  const parsed = z.array(positiveInt).safeParse(splitCsv(value));
+const csvIds = z.string().transform((value, ctx) => {
+  const parsed = z.array(idString).safeParse(splitCsv(value));
   if (!parsed.success) {
-    ctx.addIssue({ code: "custom", message: "Must be a comma-separated list of positive integers" });
+    ctx.addIssue({ code: "custom", message: "Must be a comma-separated list of non-empty ids" });
     return z.NEVER;
   }
   return parsed.data;
@@ -116,13 +136,13 @@ const sortSchema = z.string().transform((value, ctx) => {
 });
 
 export const taskFiltersSchema = z.object({
-  id: csvNumbers.optional(),
+  id: csvIds.optional(),
   status: csvStatuses.optional(),
   creator: z.string().trim().min(1).optional(),
   timeField: z.enum(["start", "end"]).default("start"),
   from: isoDateTime.optional(),
   to: isoDateTime.optional(),
-  parentId: positiveInt.optional(),
+  parentId: idString.optional(),
   visible: z
     .enum(["true", "false"])
     .transform((v) => v === "true")
@@ -131,7 +151,7 @@ export const taskFiltersSchema = z.object({
   sort: sortSchema.default(DEFAULT_SORT),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
-  cursor: positiveInt.optional(), // wins over offset, see repository.ts
+  cursor: idString.optional(), // wins over offset, see repository.ts
 });
 
 export type TaskFiltersInput = z.infer<typeof taskFiltersSchema>;

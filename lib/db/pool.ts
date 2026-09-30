@@ -1,23 +1,26 @@
-import mysql, { type Pool } from "mysql2/promise";
+import { Pool } from "pg";
 
 declare global {
-  var __mysqlPool: Pool | undefined;
+  // eslint-disable-next-line no-var
+  var __pgPool: Pool | undefined;
 }
 
-
-// one pool per process, stashed on global to survive HMR
+// one pool per process, stashed on global to survive HMR.
+// DATABASE_URL is a Supabase Postgres connection string (project settings -> Database).
 export function getPool(): Pool {
-  if (!global.__mysqlPool) {
-    global.__mysqlPool = mysql.createPool({
-      host: process.env.DB_HOST ?? "localhost",
-      port: Number(process.env.DB_PORT ?? 3306),
-      user: process.env.DB_USER ?? "root",
-      password: process.env.DB_PASSWORD ?? "",
-      database: process.env.DB_NAME ?? "global_tech_taskmanager",
-      waitForConnections: true,
-      connectionLimit: Number(process.env.DB_CONNECTION_LIMIT ?? 10),
-      dateStrings: true,
+  if (!global.__pgPool) {
+    const connectionString = process.env.DATABASE_URL;
+    if (!connectionString) {
+      throw new Error("DATABASE_URL is not set (expected a Supabase Postgres connection string)");
+    }
+
+    global.__pgPool = new Pool({
+      connectionString,
+      max: Number(process.env.DB_CONNECTION_LIMIT ?? 10),
+      // Supabase connections are TLS; rejectUnauthorized defaults to true unless
+      // explicitly disabled (self-signed/pooler cert chains commonly need this off).
+      ssl: { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== "false" },
     });
   }
-  return global.__mysqlPool;
+  return global.__pgPool;
 }
