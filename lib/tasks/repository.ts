@@ -169,6 +169,13 @@ export async function getTaskById(id: string): Promise<Task | null> {
   return rows[0] ? rowToTask(rows[0]) : null;
 }
 
+export async function getVisibleTaskById(id: string, viewerId: string): Promise<Task | null> {
+  const task = await getTaskById(id);
+  if (!task) return null;
+  if (!task.visible && task.createdById !== viewerId) return null;
+  return task;
+}
+
 // --- transactions: every write below pairs a `tasks` mutation with a
 // `task_events` row, committed or rolled back together. ---
 

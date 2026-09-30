@@ -1,7 +1,7 @@
 import { withRequestLogging } from "@/lib/observability";
 import { resolveAuthUser } from "@/lib/auth";
 import { fail, ok, toErrorResponse } from "@/lib/http";
-import { getTaskById, softDeleteTaskById, updateTaskWithVersion } from "@/lib/tasks/repository";
+import { getVisibleTaskById, softDeleteTaskById, updateTaskWithVersion } from "@/lib/tasks/repository";
 import { patchTaskSchema } from "@/lib/validation/task";
 
 function parseId(raw: string): string | null {
@@ -19,9 +19,8 @@ async function handleGET(request: Request, { params }: Params) {
     const id = parseId((await params).id);
     if (id === null) return fail(400, "id must be a non-empty string");
 
-    const task = await getTaskById(id);
+    const task = await getVisibleTaskById(id, user.id);
     if (!task) return fail(404, `Task ${id} not found`);
-    if (!task.visible && task.createdById !== user.id) return fail(404, `Task ${id} not found`);
 
     return ok(task);
   } catch (error) {

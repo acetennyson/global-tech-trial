@@ -3,7 +3,7 @@ import type { Task } from "@/lib/types";
 import { authHeaderFor } from "@/lib/testUtils/authHeader";
 
 vi.mock("@/lib/tasks/repository", () => ({
-  getTaskById: vi.fn(),
+  getVisibleTaskById: vi.fn(),
   updateTaskWithVersion: vi.fn(),
   softDeleteTaskById: vi.fn(),
 }));
@@ -45,7 +45,7 @@ beforeEach(() => {
 
 describe("GET /api/tasks/:id", () => {
   it("returns the task when it exists and is visible to the caller", async () => {
-    vi.mocked(repo.getTaskById).mockResolvedValue(sampleTask);
+    vi.mocked(repo.getVisibleTaskById).mockResolvedValue(sampleTask);
     const res = await GET(req(`http://localhost/api/tasks/${sampleTask.id}`), ctx(sampleTask.id));
     const body = await res.json();
     expect(res.status).toBe(200);
@@ -53,7 +53,9 @@ describe("GET /api/tasks/:id", () => {
   });
 
   it("returns 404 for a non-visible task belonging to someone else", async () => {
-    vi.mocked(repo.getTaskById).mockResolvedValue({ ...sampleTask, visible: false });
+    // The repository layer applies visibility; a non-visible task owned by
+    // someone else simply resolves to null for this viewer.
+    vi.mocked(repo.getVisibleTaskById).mockResolvedValue(null);
     const res = await GET(
       new Request(`http://localhost/api/tasks/${sampleTask.id}`, { headers: otherUserHeaders }),
       ctx(sampleTask.id)
@@ -62,7 +64,7 @@ describe("GET /api/tasks/:id", () => {
   });
 
   it("returns 404 when the task doesn't exist", async () => {
-    vi.mocked(repo.getTaskById).mockResolvedValue(null);
+    vi.mocked(repo.getVisibleTaskById).mockResolvedValue(null);
     const res = await GET(req("http://localhost/api/tasks/missing"), ctx("missing"));
     expect(res.status).toBe(404);
   });
@@ -70,13 +72,13 @@ describe("GET /api/tasks/:id", () => {
   it("returns 401 when no auth header is present", async () => {
     const res = await GET(new Request(`http://localhost/api/tasks/${sampleTask.id}`), ctx(sampleTask.id));
     expect(res.status).toBe(401);
-    expect(repo.getTaskById).not.toHaveBeenCalled();
+    expect(repo.getVisibleTaskById).not.toHaveBeenCalled();
   });
 
   it("returns 400 for a blank id", async () => {
     const res = await GET(req("http://localhost/api/tasks/%20"), ctx("   "));
     expect(res.status).toBe(400);
-    expect(repo.getTaskById).not.toHaveBeenCalled();
+    expect(repo.getVisibleTaskById).not.toHaveBeenCalled();
   });
 });
 

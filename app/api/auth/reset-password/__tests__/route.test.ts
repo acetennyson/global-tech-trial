@@ -6,6 +6,7 @@ vi.mock("@/lib/users/repository", () => ({
   findUserById: vi.fn(),
   updateUserPassword: vi.fn(),
   markPasswordResetTokenUsed: vi.fn(),
+  invalidateOtherPasswordResetTokens: vi.fn(),
 }));
 
 const usersRepo = await import("@/lib/users/repository");
@@ -53,6 +54,8 @@ describe("POST /api/auth/reset-password", () => {
     const [[, newHash]] = vi.mocked(usersRepo.updateUserPassword).mock.calls;
     expect(newHash).not.toBe("newpassword123");
     expect(usersRepo.markPasswordResetTokenUsed).toHaveBeenCalledWith(hashResetToken(VALID_TOKEN));
+    // every other outstanding reset link for this user is closed out too, not just this one
+    expect(usersRepo.invalidateOtherPasswordResetTokens).toHaveBeenCalledWith("user-1", hashResetToken(VALID_TOKEN));
   });
 
   it("rejects an unknown token", async () => {

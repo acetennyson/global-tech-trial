@@ -15,6 +15,7 @@ const {
   createPasswordResetToken,
   findPasswordResetToken,
   markPasswordResetTokenUsed,
+  invalidateOtherPasswordResetTokens,
 } = await import("../repository");
 
 beforeEach(() => {
@@ -122,5 +123,35 @@ describe("password reset tokens", () => {
     expect(table).toBe("password_reset_tokens");
     expect(row).toHaveProperty("used_at");
     expect(condition).toEqual({ token_hash: "abc123hash" });
+  });
+
+  describe("invalidateOtherPasswordResetTokens", () => {
+    it("marks every other still-active token for the user as used, excluding the given hash", async () => {
+      vi.mocked(advanceSQL.advanceSelect).mockResolvedValue([
+        { token_hash: "just-used" },
+        { token_hash: "older-link-1" },
+        { token_hash: "older-link-2" },
+      ] as never);
+      vi.mocked(advanceSQL.advanceUpdate).mockResolvedValue(2 as never);
+
+      await invalidateOtherPasswordResetTokens("user-1", "just-used");
+
+      expect(advanceSQL.advanceSelect).toHaveBeenCalledWith("password_reset_tokens", ["token_hash"], {
+        user_id: "user-1",
+        used_at: null,
+      });
+      const [[table, row, condition]] = vi.mocked(advanceSQL.advanceUpdate).mock.calls;
+      expect(table).toBe("password_reset_tokens");
+      expect(row).toHaveProperty("used_at");
+      expect(condition).toEqual({ __IN: { token_hash: ["older-link-1", "older-link-2"] } });
+    });
+
+    it("does nothing when there are no other active tokens", async () => {
+      vi.mocked(advanceSQL.advanceSelect).mockResolvedValue([{ token_hash: "just-used" }] as never);
+
+      await invalidateOtherPasswordResetTokens("user-1", "just-used");
+
+      expect(advanceSQL.advanceUpdate).not.toHaveBeenCalled();
+    });
   });
 });
