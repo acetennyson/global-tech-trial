@@ -1,3 +1,4 @@
+import { withRequestLogging } from "@/lib/observability";
 import { resolveAuthUser } from "@/lib/auth";
 import { ok, toErrorResponse } from "@/lib/http";
 import { applySyncBatch } from "@/lib/sync/service";
@@ -8,7 +9,7 @@ import { syncBatchSchema, syncPullQuerySchema } from "@/lib/sync/validation";
 // its own id, reused as the idempotency key for that specific mutation — a
 // resent batch (client never saw the response) re-applies nothing, it just
 // replays the same accepted/conflict/rejected outcome per operation.
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   try {
     const user = resolveAuthUser(request);
     const body = await request.json();
@@ -23,7 +24,7 @@ export async function POST(request: Request) {
 // Pull: durable catch-up since a cursor, built off task_events (Module 1) rather
 // than the tasks table directly — that's what lets a deleted task still show up
 // to a client that only has the old, non-tombstoned copy.
-export async function GET(request: Request) {
+async function handleGET(request: Request) {
   try {
     const user = resolveAuthUser(request);
     const url = new URL(request.url);
@@ -34,3 +35,6 @@ export async function GET(request: Request) {
     return toErrorResponse(error);
   }
 }
+
+export const POST = withRequestLogging(handlePOST);
+export const GET = withRequestLogging(handleGET);

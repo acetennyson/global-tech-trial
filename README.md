@@ -6,11 +6,13 @@ A Task Manager REST API on Next.js App Router route handlers, backed by Supabase
 
 Three layers, each only aware of the one below it, so any can be swapped alone. Mirrors the `advanceSQL.php` toolkit this was ported from.
 
-| Layer         | File                                               | Responsibility                                                                                                                                                                            |
-| ------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Query builder | [lib/db/queryBuilder.ts](lib/db/queryBuilder.ts)   | `Condition` in, `{ sql, params }` out. No I/O, cheap to unit test. DB-agnostic, emits `?` placeholders. |
+
+| Layer         | File                                               | Responsibility                                                                                                                                                                                                                                                                            |
+| ------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Query builder | [lib/db/queryBuilder.ts](lib/db/queryBuilder.ts)   | `Condition` in, `{ sql, params }` out. No I/O, cheap to unit test. DB-agnostic, emits `?` placeholders.                                                                                                                                                                                   |
 | Execution     | [lib/db/advanceSQL.ts](lib/db/advanceSQL.ts)       | Runs those queries via a shared `pg` pool ([lib/db/pool.ts](lib/db/pool.ts)) against Supabase Postgres. Table-agnostic: `advanceSelect`, `advanceInsert`, `advanceUpdate`, `advanceDelete`, `advanceDeleteAll`. Converts `?` to Postgres's `$1, $2, ...` right before the query goes out. |
-| Repository    | [lib/tasks/repository.ts](lib/tasks/repository.ts) | The only file that knows about `tasks` specifically: row/API mapping, filters to `Condition`, transactional writes (task and `task_events` together), optimistic concurrency, tombstones, idempotency. |
+| Repository    | [lib/tasks/repository.ts](lib/tasks/repository.ts) | The only file that knows about `tasks` specifically: row/API mapping, filters to `Condition`, transactional writes (task and `task_events` together), optimistic concurrency, tombstones, idempotency.                                                                                    |
+
 
 Every query is parameterized. Table and column names go through an allow-list check (`assertSafeIdentifier`) instead, since those can't be parameterized.
 
@@ -64,6 +66,28 @@ npm test
 
 `client/` (the offline client, see below) has its own separate suite: `cd client && npm test`.
 
+## Logs, request IDs and health (TM-5)
+
+**Logs.** JSON, one line per event, on stdout. Set `LOG_LEVEL` to `debug`, `info` (default), `warn`, `error` or `silent`. Passwords, tokens and similar fields are redacted. Each request logs one line with method, path, status and duration.
+
+**Request IDs.** Every request gets an `x-request-id`. If the caller sends a valid one (up to 64 characters of `A-Za-z0-9._-`) it is kept, otherwise a UUID is generated. It comes back in the response header and appears on every log line for that request.
+
+Example: a user reports an error. Ask for the `x-request-id` from the response, search the logs for it, and you see everything that request did.
+
+**New routes** must be exported through the wrapper, or they get no ID and no log line:
+
+```ts
+async function handleGET(request: Request) { /* ... */ }
+export const GET = withRequestLogging(handleGET);
+```
+
+**Health.** `GET /health` runs `SELECT 1` on the database. No auth.
+
+- Database up: `200 {"status":"ok","checks":{"database":"up"}}`
+- Database down or slower than 2 seconds: `503 {"status":"error","checks":{"database":"down"}}`, and the real error goes to the logs.
+
+
+
 ## Authentication (TM-2: real JWT auth)
 
 `x-user-id`/`x-user-name` are gone. `resolveAuthUser` now verifies a signed JWT:
@@ -82,7 +106,7 @@ curl -X POST http://localhost:3000/api/auth/register \
   -d '{"email":"ada@example.com","password":"correct horse battery staple","name":"Ada"}'
 ```
 
-`email`, `password` (min 8 characters) required; `name` optional. `409` if the email is already registered. Returns `{ user, token }` — `user` never includes the password hash.
+`email`, `password` (min 8 characters) required; `name` optional. `409` if the email is already registered. Returns `{ user, token }` , `user` never includes the password hash.
 
 ### `POST /api/auth/login`
 
@@ -92,7 +116,7 @@ curl -X POST http://localhost:3000/api/auth/login \
   -d '{"email":"ada@example.com","password":"correct horse battery staple"}'
 ```
 
-Same `{ user, token }` shape. `401` with the same message either way for a wrong password or an unknown email — the password check still runs against a dummy hash even when there's no matching user, so a client can't tell the two apart by response time.
+Same `{ user, token }` shape. `401` with the same message either way for a wrong password or an unknown email, the password check still runs against a dummy hash even when there's no matching user, so a client can't tell the two apart by response time.
 
 ### `POST /api/auth/forgot-password`
 
@@ -142,20 +166,22 @@ Success: `{ "data": ... }`. Failure: `{ "error": { "message": ..., "details": ..
 
 Requires auth. Results are scoped to what you're allowed to see (your own tasks, plus everyone's visible ones), on top of whatever filters you pass.
 
+
 | Query param  | Example                     | Meaning                                                                                                                                                                               |
 | ------------ | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`         | `id=t1,t2,t3`                | Match any of these ids. Strings now, ULID/UUID, not integers.                                                                                                                       |
-| `status`     | `status=todo,inProgress`    | Match any of `todo`, `inProgress`, `done`.                                                                                                                                          |
+| `id`         | `id=t1,t2,t3`               | Match any of these ids. Strings now, ULID/UUID, not integers.                                                                                                                         |
+| `status`     | `status=todo,inProgress`    | Match any of `todo`, `inProgress`, `done`.                                                                                                                                            |
 | `creator`    | `creator=user-42`           | Match `createdById`.                                                                                                                                                                  |
 | `timeField`  | `timeField=end`             | Which column `from`/`to` filter: `start` (default) or `end`.                                                                                                                          |
 | `from`, `to` | `from=2026-01-01T00:00:00Z` | Date range on the column `timeField` picks. Either bound alone, or both.                                                                                                              |
-| `parentId`   | `parentId=01K8...`            | Subtasks of a given task.                                                                                                                                                            |
+| `parentId`   | `parentId=01K8...`          | Subtasks of a given task.                                                                                                                                                             |
 | `visible`    | `visible=true`              | Public (`true`) vs. creator-only (`false`).                                                                                                                                           |
 | `search`     | `search=invoice`            | Substring match on title/description.                                                                                                                                                 |
 | `sort`       | `sort=status,-startTime`    | Comma-separated fields, `-` prefix for descending. Later fields break ties. Default `-createdAt`. Allowed: `id`, `title`, `status`, `startTime`, `endTime`, `createdAt`, `updatedAt`. |
 | `limit`      | `limit=20`                  | Page size. Default `50`, max `200`.                                                                                                                                                   |
 | `offset`     | `offset=40`                 | Skip N rows. Numbered-page pagination, see below.                                                                                                                                     |
 | `cursor`     | `cursor=01K8XR2Q...`        | Rows with `id > cursor`. Keyset pagination, see below.                                                                                                                                |
+
 
 ```bash
 curl "http://localhost:3000/api/tasks?status=todo&from=2026-01-01T00:00:00Z&sort=-startTime" \
@@ -211,6 +237,8 @@ curl -X PATCH http://localhost:3000/api/tasks/01K8XR2QC0J8Z6Y8YB2S3D5N9V \
   -d '{"status":"done","version":3}'
 ```
 
+
+
 ### `PATCH /api/tasks`: update many
 
 ```bash
@@ -248,7 +276,7 @@ Say a phone goes offline, queues a create, an update, then a delete on the same 
 
 Reads from `task_events`, not `tasks` directly. That's what lets a tombstoned task still reach a client whose only copy is the old, non-deleted one. Scoped the same way as `GET /api/tasks` — an event for a task you can't see is skipped, though it still advances the cursor so the pull doesn't stall on it. Returns a page of events plus a `nextCursor`.
 
-## Offline client (`client/`)
+## Offline client
 
 A separate package ([client/](client)) implementing Module 3: local-first writes via IndexedDB (Dexie), a durable sync queue, and a sync engine that drains that queue against `/api/sync` with exponential backoff and conflict surfacing. See [client/src/index.ts](client/src/index.ts) for the public API. It doesn't make HTTP calls itself — a `SyncClient` implementation (the actual `fetch` calls, including the `Authorization` header above) is injected by whatever app embeds it.
 
@@ -256,16 +284,16 @@ A separate package ([client/](client)) implementing Module 3: local-first writes
 
 The current stack (Supabase Postgres, a `pg` pool, Next.js route handlers) holds up fine to real but moderate traffic. Past that, in priority order:
 
-1. **Default to `cursor`, not `offset`.** See "offset vs. cursor" above, same reasoning at scale: `offset=900000` degrades, `cursor` doesn't.
-2. **Stay on Supabase's connection pooler** (already set up here, see Install), and size the pool for the whole fleet of app instances, not one. Ten instances each opening ten direct connections is the fastest way to take Postgres down.
-3. **Rate limit with shared state.** A Redis-backed token bucket keyed by user id, not an in-process counter. Two app instances, two separate counters, the limit stops meaning anything.
-4. **Move bulk operations to a background job.** `DELETE /api/tasks` with `{"all": true}` on tens of millions of rows would blow past any request timeout. Enqueue it instead: return `202 Accepted` with a job id, delete in batches from a worker. Fix the missing auth check on the bulk routes at the same time — see the note under Authorization above.
+1. **Default to** `cursor`**, not** `offset`**.** See "offset vs. cursor" above, same reasoning at scale: `offset=900000` degrades, `cursor` doesn't.
+2. **Stay on Supabase's connection pooler** (already implemented btw), and size the pool for the whole fleet of app instances, not one. Ten instances each opening ten direct connections is the fastest way to take Postgres down.
+3. **Rate limit with shared state:** A Redis-backed token bucket keyed by user id, not an in-process counter. Two app instances, two separate counters, the limit stops meaning anything.
+4. **Move bulk operations to a background job:** `DELETE /api/tasks` with `{"all": true}` on tens of millions of rows would blow past any request timeout. Enqueue it instead: return `202 Accepted` with a job id, delete in batches from a worker. Fix the missing auth check on the bulk routes at the same time — see the note under Authorization above.
 5. **Push change delivery instead of polling.** A million clients hitting `GET /api/sync?cursor=...` on a timer is a million wasted requests when nothing changed. Supabase Realtime pushes `task_events` changes to connected clients directly.
-6. **The offline-first client is already built** ([client/](client), Module 3) — writes hit a local store first and sync in the background, instead of every click waiting on a round trip. At this scale, "wait for the server to confirm" is its own bottleneck, separate from server capacity, and the gap only gets worse on slow or flaky connections.
-7. **Replace `search`'s `LIKE '%term%'`.** A leading wildcard can't use a B-tree index, that's a full table scan on every search. Postgres's own fulltext (`tsvector`/`pg_trgm`) or a dedicated engine like Meilisearch once search is a real feature.
+6. **The offline-first client is already built** ([client/](client)) : writes hit a local store first and sync in the background, instead of every click waiting on a round trip. At this scale, "wait for the server to confirm" is its own bottleneck, separate from server capacity, and the gap only gets worse on slow or flaky connections.
+7. **Replace** `search`**'s** `LIKE '%term%'`**:** A leading wildcard can't use a B-tree index, that's a full table scan on every search. Postgres's own fulltext (`tsvector`/`pg_trgm`) or a dedicated engine like Meilisearch once search is a real feature.
 8. **Cache selectively.** `tasks` is write-heavy, so caching `GET /api/tasks` risks serving stale data right after a write. `GET /api/tasks/:id`, invalidated on that task's own update or delete, is safer to start with.
 9. **Read replicas**, once a single Postgres primary is actually the bottleneck, not before. Check the pooler and indexing first. Route reads that can tolerate slight staleness (list views) to a replica, keep writes and anything version-sensitive on the primary.
-10. **Partition `tasks` by `created_at`** once real traffic patterns are known, on top of the existing indexes on `status`, `created_by_id`, `start_time`, `end_time`, `parent_id` (see [schema.sql](lib/db/schema.sql)):
+10. **Partition** `tasks` **by** `created_at` once real traffic patterns are known, on top of the existing indexes on `status`, `created_by_id`, `start_time`, `end_time`, `parent_id` (see [schema.sql](lib/db/schema.sql)):
 
 ```sql
 CREATE TABLE tasks_2026 PARTITION OF tasks
