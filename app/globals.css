@@ -1,26 +1,23 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", var(--font-geist-sans), "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", var(--font-geist-mono), Menlo, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/* Section tones. Components read these variables, so one form works on light and dark. */
+.tone-light { --bg: #fbfbfd; --fg: #1d1d1f; --mute: #6e6e73; --card: #ffffff; --line: #d2d2d7; --field: #ffffff; --code: #f5f5f7; }
+.tone-gray  { --bg: #f5f5f7; --fg: #1d1d1f; --mute: #6e6e73; --card: #ffffff; --line: #d2d2d7; --field: #ffffff; --code: #f5f5f7; }
+.tone-dark  { --bg: #000000; --fg: #f5f5f7; --mute: #a1a1a6; --card: #1d1d1f; --line: #424245; --field: #2c2c2e; --code: #0b0b0c; }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+html { scroll-behavior: smooth; scroll-padding-top: 3.5rem; }
+body { background: #fbfbfd; color: #1d1d1f; font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+
+.glass-nav { background: rgba(251, 251, 253, 0.8); backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px); }
+
+:focus-visible { outline: 2px solid #0071e3; outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { transition: none !important; }
 }
