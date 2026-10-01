@@ -1,6 +1,6 @@
 # Global Tech Task Manager
 
-A task manager REST API on Next.js route handlers and Supabase Postgres, with JWT auth and a sync protocol for changes made offline. The home page (`/`) is an API playground: register, create tasks, reset a password, all against the real endpoints. There is no other UI.
+A task manager REST API on Next.js route handlers and Supabase Postgres, with JWT auth and a sync protocol for changes made offline. The home page (`/`) is an API playground: register, create tasks, reset a password, all against the real endpoints. Beyond that playground and `curl`, there is no UI, and in particular no `/reset-password` page (see Auth).
 
 ## Architecture
 
@@ -33,11 +33,11 @@ JWT_SECRET=<openssl rand -base64 48>
 Use the pooler connection string (Supabase, Project Settings, Database, Connection pooling). The direct `db.<ref>.supabase.co` host is IPv6-only and won't resolve on most networks. `JWT_SECRET` is required. Every other variable is explained in `.env.example`.
 
 ```bash
-npm run db:migrate   # creates users, tasks, task_events, idempotency_keys
+npm run db:migrate   # creates users, password_reset_tokens, tasks, task_events, idempotency_keys, rate_limits
 npm run dev          # http://localhost:3000
 ```
 
-`db:migrate` is safe to re-run. It also upgrades older databases (per-user idempotency keys, request hashes).
+`db:migrate` drops and recreates every table, so re-running it deletes all data.
 
 ## Tests
 
@@ -68,9 +68,19 @@ TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login -H "content-type: a
 | `POST /api/auth/forgot-password`| Always `200` with the same message, whether or not the account exists, **including when the email fails to send** (the error is only logged). A `500` for real accounts would reveal who is registered. |
 | `POST /api/auth/reset-password` | `{ token, password }`. `400` for a missing, used or expired token (one generic message). On success the token is burned, every other reset link for that user stops working, and you get `{ user, token }`. |
 
-Reset tokens are random, stored hashed, single-use and expire after 1 hour. Passwords are hashed with bcrypt (cost 12).
+Reset tokens are random, stored hashed, single-use and expire after 1 hour. Passwords are hashed with bcrypt (cost 12). Resetting runs in one transaction (claim the token, set the password, close the user's other links), so it fully happens or not at all, and two requests with the same link can't both succeed.
 
-**Reset page.** The email links to `${APP_URL}/reset-password?token=...`, and that page does not exist. Copy the token from the link and paste it into the "Forgot your password?" section of the playground, or call the endpoint with curl. A real page would only need to read `token` from the URL and POST it.
+**Rate limits.** Counters live in the `rate_limits` table, so all serverless instances share them. Over a limit you get `429` with a `Retry-After` header.
+
+| Endpoint | Limit | Notes |
+| --- | --- | --- |
+| `register` | 5 per hour per IP | |
+| `login` | 5 failures per 15 min per email + IP, 30 per 15 min per IP | Only failed logins count. Keyed on email + IP so an attacker can't lock someone out from elsewhere. |
+| `forgot-password` | 10 per hour per IP (`429`), 3 per hour per email | Over the per-email limit it still returns the normal `200` and silently sends nothing. A `429` there would reveal the email is registered. Counted for unknown emails too. |
+
+Emails are hashed in the counter keys. The IP comes from `x-real-ip` / `x-forwarded-for`, which Vercel sets and clients can't forge. If you self-host, make your proxy overwrite them. The limiter fails open if the database errors. Set `RATE_LIMIT_DISABLED=true` to switch it off for local testing. Limits are demo-sized and live in `lib/rateLimit.ts`.
+
+**Reset UI.** The email links to `${APP_URL}/reset-password?token=...`, and that page does not exist (the link returns a 404). To finish a reset, copy the token from the link into the "Forgot your password?" section of the home-page playground, or call `POST /api/auth/reset-password` with curl. A real page would only need to read `token` from the URL and POST it.
 
 **Authorization.** A task is visible to its creator, and to everyone else only if `visible: true`. Only the creator can edit or delete it (`403`). A hidden task returns `404`, the same as a missing one.
 
@@ -181,11 +191,9 @@ Each operation's `id` is its idempotency key. Resending a batch after a lost res
 ## Known limitations
 
 - **Same-key race.** Two simultaneous requests with the same brand-new Idempotency-Key can both pass the lookup. The second fails on the primary key with a `500`. Nothing is duplicated, and retrying the key returns the stored task.
-- **No rate limiting** on register, login or forgot-password, so the reset email can be spammed.
-- **Password reset is not one transaction.** Updating the password, marking the token used and invalidating other tokens are separate statements.
-- **`tasks.created_by_id` is not a foreign key** to `users`.
 - **Bulk update** has no per-row version check.
-- **No reset-password page** (see Auth).
+- **Rate limiting is fixed-window and Postgres-backed.** A client can burst up to twice the limit across a window boundary, and every auth request costs one extra write. At real scale, use Redis.
+- **No `/reset-password` page.** The emailed link 404s. Use the playground or curl (see Auth).
 
 ## Scaling to 1 million users
 

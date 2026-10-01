@@ -4,11 +4,22 @@ import { loginSchema } from "@/lib/validation/auth";
 import { verifyPassword } from "@/lib/auth/password";
 import { signToken } from "@/lib/auth/jwt";
 import { findUserByEmail } from "@/lib/users/repository";
+import { LIMITS, checkRateLimit, getClientIp, keyPart, recordRateLimitHit, tooManyRequests } from "@/lib/rateLimit";
 
 async function handlePOST(request: Request) {
   try {
     const body = await request.json();
     const { email, password } = loginSchema.parse(body);
+
+    // Only FAILED logins are counted, so normal users are never punished. The limit applies
+    // to any email string the same way, so a 429 reveals nothing about which accounts exist.
+    const ip = getClientIp(request);
+    const pairRule = { key: `login:pair:${keyPart(email)}|${ip}`, ...LIMITS.login.emailAndIp };
+    const ipRule = { key: `login:ip:${ip}`, ...LIMITS.login.ip };
+    for (const rule of [pairRule, ipRule]) {
+      const blocked = await checkRateLimit(rule);
+      if (!blocked.allowed) return tooManyRequests(blocked.retryAfterSeconds);
+    }
 
     const user = await findUserByEmail(email);
     // Same message for an unknown email and a wrong password. The bcrypt compare
@@ -18,6 +29,8 @@ async function handlePOST(request: Request) {
     const validPassword = await verifyPassword(password, passwordHash);
 
     if (!user || !validPassword) {
+      await recordRateLimitHit(pairRule);
+      await recordRateLimitHit(ipRule);
       return fail(401, "Invalid email or password");
     }
 

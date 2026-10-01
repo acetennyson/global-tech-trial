@@ -3,6 +3,7 @@
 -- editor and rebuild the schema from scratch. THIS DELETES ALL DATA.
 -- Children first, so foreign keys don't block the drops.
 -- =====================================================================
+DROP TABLE IF EXISTS rate_limits;
 DROP TABLE IF EXISTS idempotency_keys;
 DROP TABLE IF EXISTS task_events;
 DROP TABLE IF EXISTS password_reset_tokens;
@@ -112,23 +113,13 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
   PRIMARY KEY (user_id, key)
 );
 
--- Upgrade for older databases (key was the primary key). Rows that can't be tied to a user are dropped.
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'idempotency_keys' AND column_name = 'user_id'
-  ) THEN
-    ALTER TABLE idempotency_keys ADD COLUMN user_id TEXT;
-    UPDATE idempotency_keys k SET user_id = t.created_by_id
-      FROM tasks t WHERE t.id = k.task_id;
-    DELETE FROM idempotency_keys WHERE user_id IS NULL;
-    ALTER TABLE idempotency_keys ALTER COLUMN user_id SET NOT NULL;
-    ALTER TABLE idempotency_keys DROP CONSTRAINT IF EXISTS idempotency_keys_pkey;
-    ALTER TABLE idempotency_keys ADD PRIMARY KEY (user_id, key);
-  END IF;
-END $$;
+-- Shared counters for the rate limiter (lib/rateLimit.ts). One row per (key, window).
+-- `key` is e.g. "login:<hash of email>|<ip>"; old windows are deleted opportunistically.
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key TEXT NOT NULL,
+  window_start TIMESTAMPTZ NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (key, window_start)
+);
 
--- sha256 of the original request, so reusing a key with a different body is rejected.
--- NULL on older rows, which are accepted as a match.
-ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS request_hash TEXT;
+CREATE INDEX IF NOT EXISTS idx_rate_limits_window_start ON rate_limits (window_start);

@@ -6,12 +6,23 @@ vi.mock("@/lib/users/repository", () => ({
 }));
 vi.mock("@/lib/email/sendPasswordResetEmail", () => ({ sendPasswordResetEmail: vi.fn() }));
 
+vi.mock("@/lib/rateLimit", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/rateLimit")>()),
+  hitRateLimit: vi.fn(),
+  checkRateLimit: vi.fn(),
+  recordRateLimitHit: vi.fn(),
+}));
+
 const usersRepo = await import("@/lib/users/repository");
 const email = await import("@/lib/email/sendPasswordResetEmail");
+const rateLimit = await import("@/lib/rateLimit");
 const { POST } = await import("../route");
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(rateLimit.hitRateLimit).mockResolvedValue({ allowed: true });
+  vi.mocked(rateLimit.checkRateLimit).mockResolvedValue({ allowed: true });
+
   process.env.JWT_SECRET = "test-secret-do-not-use-in-production";
 });
 
@@ -79,5 +90,44 @@ describe("POST /api/auth/forgot-password", () => {
 
     expect(res.status).toBe(200);
     expect(body.data.message).toMatch(/if an account exists/i);
+  });
+
+  it("returns 429 with Retry-After when the IP is over the limit, and sends nothing", async () => {
+    vi.mocked(rateLimit.hitRateLimit).mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 600 });
+
+    const res = await POST(request({ email: "ada@example.com" }));
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe("600");
+    expect(email.sendPasswordResetEmail).not.toHaveBeenCalled();
+  });
+
+  it("over the per-email limit: same generic 200 as always, but no lookup and no email (no account oracle)", async () => {
+    vi.mocked(rateLimit.hitRateLimit)
+      .mockResolvedValueOnce({ allowed: true }) // ip
+      .mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 600 }); // email
+
+    const limited = await POST(request({ email: "ada@example.com" }));
+    const limitedBody = await limited.json();
+
+    vi.mocked(usersRepo.findUserByEmail).mockResolvedValue(null);
+    vi.mocked(rateLimit.hitRateLimit).mockResolvedValue({ allowed: true });
+    const unknown = await POST(request({ email: "nobody@example.com" }));
+
+    expect(limited.status).toBe(200);
+    expect(limited.status).toBe(unknown.status);
+    expect(limitedBody).toEqual(await unknown.json());
+    expect(email.sendPasswordResetEmail).not.toHaveBeenCalled();
+    expect(usersRepo.createPasswordResetToken).not.toHaveBeenCalled();
+  });
+
+  it("counts the per-email limit for unknown addresses too, keyed by a hash and not the plain email", async () => {
+    vi.mocked(usersRepo.findUserByEmail).mockResolvedValue(null);
+    await POST(request({ email: "nobody@example.com" }));
+
+    const keys = vi.mocked(rateLimit.hitRateLimit).mock.calls.map(([rule]) => rule.key);
+    expect(keys).toHaveLength(2);
+    expect(keys.some((k) => k.startsWith("forgot:email:"))).toBe(true);
+    expect(keys.join()).not.toContain("nobody@example.com");
   });
 });

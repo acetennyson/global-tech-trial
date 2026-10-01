@@ -2,11 +2,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/users/repository", () => ({ createUser: vi.fn() }));
 
+vi.mock("@/lib/rateLimit", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/rateLimit")>()),
+  hitRateLimit: vi.fn(),
+  checkRateLimit: vi.fn(),
+  recordRateLimitHit: vi.fn(),
+}));
+
 const usersRepo = await import("@/lib/users/repository");
+const rateLimit = await import("@/lib/rateLimit");
 const { POST } = await import("../route");
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(rateLimit.hitRateLimit).mockResolvedValue({ allowed: true });
+  vi.mocked(rateLimit.checkRateLimit).mockResolvedValue({ allowed: true });
+
   process.env.JWT_SECRET = "test-secret-do-not-use-in-production";
 });
 
@@ -54,5 +65,26 @@ describe("POST /api/auth/register", () => {
     vi.mocked(usersRepo.createUser).mockResolvedValue({ status: "email_taken" });
     const response = await POST(request({ email: "ada@example.com", password: "hunter2hunter2" }));
     expect(response.status).toBe(409);
+  });
+
+  it("returns 429 with Retry-After when the IP is over the limit, without creating a user", async () => {
+    vi.mocked(rateLimit.hitRateLimit).mockResolvedValue({ allowed: false, retryAfterSeconds: 120 });
+
+    const response = await POST(request({ email: "ada@example.com", password: "hunter2hunter2" }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("120");
+    expect(usersRepo.createUser).not.toHaveBeenCalled();
+  });
+
+  it("counts attempts per client IP", async () => {
+    vi.mocked(usersRepo.createUser).mockResolvedValue({ status: "email_taken" });
+    const req = new Request("http://localhost/api/auth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-real-ip": "203.0.113.7" },
+      body: JSON.stringify({ email: "ada@example.com", password: "hunter2hunter2" }),
+    });
+    await POST(req);
+    expect(rateLimit.hitRateLimit).toHaveBeenCalledWith(expect.objectContaining({ key: "register:ip:203.0.113.7" }));
   });
 });

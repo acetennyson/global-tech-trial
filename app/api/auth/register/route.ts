@@ -4,9 +4,14 @@ import { registerSchema } from "@/lib/validation/auth";
 import { hashPassword } from "@/lib/auth/password";
 import { signToken } from "@/lib/auth/jwt";
 import { createUser } from "@/lib/users/repository";
+import { LIMITS, getClientIp, hitRateLimit, tooManyRequests } from "@/lib/rateLimit";
 
 async function handlePOST(request: Request) {
   try {
+    // checked before anything expensive (bcrypt) runs
+    const limited = await hitRateLimit({ key: `register:ip:${getClientIp(request)}`, ...LIMITS.register.ip });
+    if (!limited.allowed) return tooManyRequests(limited.retryAfterSeconds);
+
     const body = await request.json();
     const { email, password, name } = registerSchema.parse(body);
 
