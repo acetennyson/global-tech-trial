@@ -52,7 +52,13 @@ export async function advanceInsert(
   conn: Executor = getPool()
 ): Promise<string> {
   const { sql, params } = buildInsertQuery(table, data);
-  // RETURNING id works for both client-supplied and server-generated ids
+  // Every table with an `id` column gets it back. Tables without one (idempotency_keys has
+  // a composite key of user_id + key) must NOT ask for it, or Postgres errors with
+  // `column "id" does not exist`.
+  if (!("id" in data)) {
+    await conn.query(toPositional(sql), params);
+    return "";
+  }
   const result = await conn.query<{ id: string }>(`${toPositional(sql)} RETURNING id`, params);
   return result.rows[0].id;
 }
