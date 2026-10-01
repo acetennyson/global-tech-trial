@@ -4,13 +4,7 @@ import { resetPasswordSchema } from "@/lib/validation/auth";
 import { hashResetToken } from "@/lib/auth/resetToken";
 import { hashPassword } from "@/lib/auth/password";
 import { signToken } from "@/lib/auth/jwt";
-import {
-  findPasswordResetToken,
-  findUserById,
-  invalidateOtherPasswordResetTokens,
-  markPasswordResetTokenUsed,
-  updateUserPassword,
-} from "@/lib/users/repository";
+import { findPasswordResetToken, resetPasswordWithToken } from "@/lib/users/repository";
 
 const INVALID_TOKEN_MESSAGE = "Invalid or expired reset token";
 
@@ -26,17 +20,15 @@ async function handlePOST(request: Request) {
       return fail(400, INVALID_TOKEN_MESSAGE);
     }
 
-    const user = await findUserById(record.userId);
-    if (!user) {
-      // orphaned token, user row gone. same message either way.
+    // cheap pre-check above avoids hashing for junk tokens. This call re-checks the token
+    // atomically and does password + used + invalidate-others in one transaction.
+    const passwordHash = await hashPassword(password);
+    const result = await resetPasswordWithToken(tokenHash, passwordHash);
+    if (result.status === "invalid_token") {
+      // lost a race (token used or expired since the pre-check). same message either way.
       return fail(400, INVALID_TOKEN_MESSAGE);
     }
-
-    const passwordHash = await hashPassword(password);
-    await updateUserPassword(user.id, passwordHash);
-    // single-use, and every other reset link for this user stops working too
-    await markPasswordResetTokenUsed(tokenHash);
-    await invalidateOtherPasswordResetTokens(user.id, tokenHash);
+    const { user } = result;
 
     // same shape as /login, logs them straight in
     const authToken = signToken({ sub: user.id, name: user.name });
