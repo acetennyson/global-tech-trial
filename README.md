@@ -1,6 +1,6 @@
 # Global Tech Task Manager
 
-A task manager REST API on Next.js route handlers and Supabase Postgres, with JWT auth and a sync protocol for changes made offline. The home page (`/`) is an API playground: register, create tasks, reset a password, all against the real endpoints. Beyond that playground and `curl`, there is no UI, and in particular no `/reset-password` page (see Auth).
+A task manager REST API on Next.js route handlers and Supabase Postgres, with JWT auth and a sync API (`/api/sync`) for clients that change tasks offline. No offline client is built yet; it is listed under scaling. The home page (`/`) is an API playground: register, create tasks, reset a password, all against the real endpoints. Beyond that playground and `curl`, there is no UI, and in particular no `/reset-password` page (see Auth).
 
 ## Architecture
 
@@ -14,7 +14,7 @@ Three layers. Each only knows the one below it.
 
 All values are parameterized. Table and column names go through an allow-list check (`assertSafeIdentifier`), since they can't be parameterized.
 
-Around that: [lib/validation/](lib/validation) (Zod schemas), [lib/auth/](lib/auth) and [lib/users/](lib/users) (JWT auth), [lib/http.ts](lib/http.ts) (response format), [lib/sync/](lib/sync) (offline sync), [client/](client) (offline client package).
+Around that: [lib/validation/](lib/validation) (Zod schemas), [lib/auth/](lib/auth) and [lib/users/](lib/users) (JWT auth), [lib/http.ts](lib/http.ts) (response format), [lib/sync/](lib/sync) (server side of offline sync).
 
 ## Setup
 
@@ -44,10 +44,9 @@ npm run dev          # http://localhost:3000
 ```bash
 npm test             # app + lib tests (Vitest)
 npm run lint
-cd client && npm install && npm test   # offline client, separate suite
 ```
 
-The root run skips `client/`. Route tests mock the repository, repository and service tests mock the database layer.
+Route tests mock the repository, repository and service tests mock the database layer.
 
 ## Auth
 
@@ -161,7 +160,7 @@ Both only touch tasks you created. Other people's ids are skipped and not counte
 
 ## Sync
 
-For clients that change tasks offline.
+The server side of offline sync. There is no offline client yet (see Scaling to 1 million users).
 
 **`POST /api/sync`** pushes a batch of operations (`create`, `update`, `delete`), applied in order. Example: a phone goes offline, creates a task, edits it, deletes it, reconnects. Order matters, so the batch is never run in parallel.
 
@@ -176,10 +175,6 @@ Each operation's `id` is its idempotency key. Resending a batch after a lost res
 - `rejected` with `permanent: false`: unexpected error. Retry later.
 
 **`GET /api/sync?cursor=...`** returns changes since a cursor, read from `task_events`. That is how a deleted task reaches a device that still holds the old copy. Events for tasks you can't see are skipped but still move the cursor.
-
-## Offline client
-
-[client/](client) is a separate package: writes go to IndexedDB (Dexie) first, a durable queue holds them, and a sync engine pushes to `/api/sync` with exponential backoff and surfaces conflicts. The app embedding it supplies the `fetch` calls. See [client/src/index.ts](client/src/index.ts).
 
 ## Logs, request IDs, health
 
@@ -204,7 +199,7 @@ In priority order:
 3. **Rate limit with shared state.** A Redis token bucket per user. Two instances with their own counters make the limit meaningless.
 4. **Make big bulk operations background jobs.** `{"all": true}` on millions of rows would time out. Return `202` with a job id and work in batches.
 5. **Push changes instead of polling.** A million clients polling `/api/sync` mostly asks "anything new?" and gets no. Supabase Realtime can push `task_events`.
-6. **Keep the offline client.** Writes hit local storage first, so nothing waits on a round trip.
+6. **Build the offline client** Writes go to local storage first (IndexedDB), a durable queue holds them, and a sync engine pushes to `/api/sync` with exponential backoff and shows conflicts. Nothing waits on a round trip, and the server API for it already exists.
 7. **Replace `LIKE '%term%'` search.** A leading wildcard can't use an index. Use `tsvector`/`pg_trgm` or a search engine such as Meilisearch.
 8. **Cache carefully.** `tasks` is write-heavy, so a cached list goes stale right after a write. `GET /api/tasks/:id`, cleared on that task's update or delete, is a safer start.
 9. **Read replicas** once the primary is the actual bottleneck. Send list views there. Keep writes and version-sensitive reads on the primary.
