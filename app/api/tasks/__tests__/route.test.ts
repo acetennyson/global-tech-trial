@@ -148,7 +148,7 @@ describe("PATCH /api/tasks (bulk)", () => {
   const url = "http://localhost/api/tasks";
 
   it("updates every id in the list, scoped to the caller", async () => {
-    vi.mocked(repo.updateTasksByIds).mockResolvedValue(3);
+    vi.mocked(repo.updateTasksByIds).mockResolvedValue({ status: "ok", affected: 3 });
 
     const res = await PATCH(
       new Request(url, {
@@ -161,7 +161,69 @@ describe("PATCH /api/tasks (bulk)", () => {
 
     expect(res.status).toBe(200);
     expect(body.data.affected).toBe(3);
-    expect(repo.updateTasksByIds).toHaveBeenCalledWith(["t1", "t2", "t3"], { status: "done" }, "user-1");
+    expect(repo.updateTasksByIds).toHaveBeenCalledWith(["t1", "t2", "t3"], { status: "done" }, "user-1", undefined);
+  });
+
+  it("passes per-task versions through to the repository", async () => {
+    vi.mocked(repo.updateTasksByIds).mockResolvedValue({ status: "ok", affected: 2 });
+    await PATCH(
+      new Request(url, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", ...authHeaders },
+        body: JSON.stringify({ ids: ["t1", "t2"], data: { status: "done" }, versions: { t1: 3 } }),
+      })
+    );
+    expect(repo.updateTasksByIds).toHaveBeenCalledWith(["t1", "t2"], { status: "done" }, "user-1", { t1: 3 });
+  });
+
+  it("rejects `versions` for an id that is not in `ids`", async () => {
+    const res = await PATCH(
+      new Request(url, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", ...authHeaders },
+        body: JSON.stringify({ ids: ["t1"], data: { status: "done" }, versions: { other: 1 } }),
+      })
+    );
+    expect(res.status).toBe(400);
+    expect(repo.updateTasksByIds).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 when any id belongs to someone else", async () => {
+    vi.mocked(repo.updateTasksByIds).mockResolvedValue({ status: "forbidden", ids: ["t2"] });
+    const res = await PATCH(
+      new Request(url, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", ...authHeaders },
+        body: JSON.stringify({ ids: ["t1", "t2"], data: { status: "done" } }),
+      })
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json()).error.details).toEqual({ ids: ["t2"] });
+  });
+
+  it("returns 404 when any id does not exist or is already deleted", async () => {
+    vi.mocked(repo.updateTasksByIds).mockResolvedValue({ status: "not_found", ids: ["ghost"] });
+    const res = await PATCH(
+      new Request(url, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", ...authHeaders },
+        body: JSON.stringify({ ids: ["t1", "ghost"], data: { status: "done" } }),
+      })
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 409 with the current tasks when a version is stale", async () => {
+    vi.mocked(repo.updateTasksByIds).mockResolvedValue({ status: "conflict", conflicts: [sampleTask] });
+    const res = await PATCH(
+      new Request(url, {
+        method: "PATCH",
+        headers: { "content-type": "application/json", ...authHeaders },
+        body: JSON.stringify({ ids: [sampleTask.id], data: { status: "done" }, versions: { [sampleTask.id]: 0 + 1 } }),
+      })
+    );
+    expect(res.status).toBe(409);
+    expect((await res.json()).error.details.conflicts).toHaveLength(1);
   });
 
   it("returns 401 when no auth header is present", async () => {
@@ -181,7 +243,7 @@ describe("DELETE /api/tasks (bulk)", () => {
   const url = "http://localhost/api/tasks";
 
   it("tombstones a specific set of ids, scoped to the caller", async () => {
-    vi.mocked(repo.softDeleteTasksByIds).mockResolvedValue(2);
+    vi.mocked(repo.softDeleteTasksByIds).mockResolvedValue({ status: "ok", affected: 2 });
 
     const res = await DELETE(
       new Request(url, {
@@ -214,6 +276,30 @@ describe("DELETE /api/tasks (bulk)", () => {
     expect(body.data.affected).toBe(42);
     expect(repo.softDeleteAllTasks).toHaveBeenCalledWith("user-1");
     expect(repo.softDeleteTasksByIds).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 and deletes nothing when any id belongs to someone else", async () => {
+    vi.mocked(repo.softDeleteTasksByIds).mockResolvedValue({ status: "forbidden", ids: ["theirs"] });
+    const res = await DELETE(
+      new Request(url, {
+        method: "DELETE",
+        headers: { "content-type": "application/json", ...authHeaders },
+        body: JSON.stringify({ ids: ["t1", "theirs"] }),
+      })
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("returns 404 when any id is unknown or already deleted", async () => {
+    vi.mocked(repo.softDeleteTasksByIds).mockResolvedValue({ status: "not_found", ids: ["ghost"] });
+    const res = await DELETE(
+      new Request(url, {
+        method: "DELETE",
+        headers: { "content-type": "application/json", ...authHeaders },
+        body: JSON.stringify({ ids: ["ghost"] }),
+      })
+    );
+    expect(res.status).toBe(404);
   });
 
   it("returns 401 without auth and never deletes anything", async () => {

@@ -502,48 +502,105 @@ export async function softDeleteTaskWithVersionIdempotent(
   });
 }
 
-// Bulk writes only touch live tasks the caller created. Other people's ids are skipped.
-// Bulk update has no version check. For very large sets these should become background jobs.
+// Bulk writes are all-or-nothing, in one transaction. Every id must be a live task the caller
+// created, otherwise nothing changes: an unknown or already-deleted id is `not_found` (404), someone
+// else's task is `forbidden` (403), same as the single-task endpoints. Each changed task gets a
+// version bump and a `task_events` row, so a device that syncs later hears about bulk edits too.
+// Bulk update can also check versions per task (`versions`), and a stale one is a `conflict` (409).
+// For very large sets these should become background jobs.
 
-export async function updateTasksByIds(ids: string[], input: UpdateTaskInput, userId: string): Promise<number> {
-  const row = updateInputToRow(input);
-  if (ids.length === 0 || Object.keys(row).length === 0) return 0;
-  return advanceUpdate(TABLE, row, { __IN: { id: ids }, created_by_id: userId, deleted_at: null });
+export type BulkOutcome =
+  | { status: "ok"; affected: number }
+  | { status: "not_found"; ids: string[] }
+  | { status: "forbidden"; ids: string[] }
+  | { status: "conflict"; conflicts: Task[] };
+
+type BulkTargets = { failure: Exclude<BulkOutcome, { status: "ok" }> } | { failure: null; tasks: Task[] };
+
+// Locks the rows (sorted by id, so two bulk requests can't deadlock) and checks every id.
+async function lockBulkTargets(
+  client: PoolClient,
+  ids: string[],
+  userId: string,
+  versions?: Record<string, number>
+): Promise<BulkTargets> {
+  const unique = [...new Set(ids)];
+  const result = await client.query<TaskRowPacket>(
+    `SELECT * FROM ${TABLE} WHERE id = ANY($1::text[]) AND deleted_at IS NULL ORDER BY id FOR UPDATE`,
+    [unique]
+  );
+  const tasks = result.rows.map(rowToTask);
+  const foundIds = new Set(tasks.map((task) => task.id));
+
+  const missing = unique.filter((id) => !foundIds.has(id));
+  if (missing.length > 0) return { failure: { status: "not_found", ids: missing } };
+
+  const foreign = tasks.filter((task) => task.createdById !== userId).map((task) => task.id);
+  if (foreign.length > 0) return { failure: { status: "forbidden", ids: foreign } };
+
+  const conflicts = tasks.filter((task) => versions?.[task.id] !== undefined && versions[task.id] !== task.version);
+  if (conflicts.length > 0) return { failure: { status: "conflict", conflicts } };
+
+  return { failure: null, tasks };
 }
 
-// Tombstones the caller's tasks and writes one `task.deleted` event each, in one
-// transaction. Same as single delete, so a phone that syncs later hears about it.
-async function softDeleteOwned(userId: string, onlyIds?: string[]): Promise<number> {
-  return withTransaction(async (client) => {
-    const params: unknown[] = [userId];
-    let idFilter = "";
-    if (onlyIds) {
-      params.push(onlyIds);
-      idFilter = " AND id = ANY($2::text[])";
+export async function updateTasksByIds(
+  ids: string[],
+  input: UpdateTaskInput,
+  userId: string,
+  versions?: Record<string, number>
+): Promise<BulkOutcome> {
+  const fields = updateInputToRow(input);
+  if (ids.length === 0 || Object.keys(fields).length === 0) return { status: "ok", affected: 0 };
+
+  return withTransaction(async (client): Promise<BulkOutcome> => {
+    const targets = await lockBulkTargets(client, ids, userId, versions);
+    if (targets.failure) return targets.failure;
+
+    for (const task of targets.tasks) {
+      await advanceUpdate(TABLE, { ...fields, version: task.version + 1 }, { id: task.id }, client);
+      const rows = await advanceSelect<TaskRowPacket>(TABLE, "*", { id: task.id }, client);
+      await writeTaskEvent(client, task.id, userId, "task.updated", rowToTask(rows[0]));
     }
-    const result = await client.query<TaskRowPacket>(
-      `UPDATE ${TABLE}
-          SET deleted_at = NOW(), version = version + 1
-        WHERE created_by_id = $1 AND deleted_at IS NULL${idFilter}
-        RETURNING *`,
-      params
-    );
-    for (const row of result.rows) {
-      const task = rowToTask(row);
-      await writeTaskEvent(client, task.id, userId, "task.deleted", task);
-    }
-    return result.rows.length;
+    return { status: "ok", affected: targets.tasks.length };
   });
 }
 
-export async function softDeleteTasksByIds(ids: string[], userId: string): Promise<number> {
-  if (ids.length === 0) return 0;
-  return softDeleteOwned(userId, ids);
+// Tombstones the caller's tasks and writes one `task.deleted` event each, in the caller's
+// transaction. Same as single delete, so a phone that syncs later hears about it.
+async function softDeleteOwned(client: PoolClient, userId: string, onlyIds?: string[]): Promise<number> {
+  const params: unknown[] = [userId];
+  let idFilter = "";
+  if (onlyIds) {
+    params.push(onlyIds);
+    idFilter = " AND id = ANY($2::text[])";
+  }
+  const result = await client.query<TaskRowPacket>(
+    `UPDATE ${TABLE}
+        SET deleted_at = NOW(), version = version + 1
+      WHERE created_by_id = $1 AND deleted_at IS NULL${idFilter}
+      RETURNING *`,
+    params
+  );
+  for (const row of result.rows) {
+    const task = rowToTask(row);
+    await writeTaskEvent(client, task.id, userId, "task.deleted", task);
+  }
+  return result.rows.length;
+}
+
+export async function softDeleteTasksByIds(ids: string[], userId: string): Promise<BulkOutcome> {
+  if (ids.length === 0) return { status: "ok", affected: 0 };
+  return withTransaction(async (client): Promise<BulkOutcome> => {
+    const targets = await lockBulkTargets(client, ids, userId);
+    if (targets.failure) return targets.failure;
+    return { status: "ok", affected: await softDeleteOwned(client, userId, targets.tasks.map((task) => task.id)) };
+  });
 }
 
 // `{ all: true }` means "all of MY tasks", never the whole table.
 export async function softDeleteAllTasks(userId: string): Promise<number> {
-  return softDeleteOwned(userId);
+  return withTransaction((client) => softDeleteOwned(client, userId));
 }
 
 // Permanently removes tombstones older than `olderThanSeconds` (run via lib/db/purge.ts).

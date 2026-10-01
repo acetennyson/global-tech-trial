@@ -154,7 +154,11 @@ curl -X DELETE http://localhost:3000/api/tasks -H "content-type: application/jso
   -d '{"ids":["t1","t2"]}'      # or {"all":true} for all of YOUR tasks
 ```
 
-Both only touch tasks you created. Other people's ids are skipped and not counted in `affected`. Bulk update has no version check. Bulk delete is a soft delete, the same as single delete: one `task.deleted` event per task, all in one transaction, so offline devices hear about it.
+Bulk writes are all-or-nothing, in one transaction, and follow the same rules as the single-task endpoints:
+- Every id must be a live task you created, or nothing changes. An unknown or already-deleted id returns `404`, someone else's task returns `403` (both list the offending ids in `error.details.ids`). So re-sending a bulk delete after it succeeded returns `404`, like single delete.
+- Bulk update takes an optional `versions` map for a per-task version check, for example `"versions": {"t1": 3}`. If any listed task has moved on, the whole request returns `409` with `error.details.conflicts` (the current tasks) and nothing is written. Tasks you don't list are not checked. Keys must also appear in `ids`.
+- Every changed task gets its `version` bumped and one `task.updated` / `task.deleted` event, so a stale single-task editor still gets a `409` after a bulk edit and offline devices hear about it.
+- `{"all":true}` deletes all of YOUR tasks and has no id check.
 
 **Purging.** `npm run db:purge` permanently removes tombstones older than `TOMBSTONE_RETENTION_SECONDS` (default 30 days). Schedule it with cron or `pg_cron`. A device that stays offline longer than that must do a full resync.
 
@@ -186,7 +190,7 @@ Each operation's `id` is its idempotency key. Resending a batch after a lost res
 ## Known limitations
 
 - **Same-key race.** Two simultaneous requests with the same brand-new Idempotency-Key can both pass the lookup. The second fails on the primary key with a `500`. Nothing is duplicated, and retrying the key returns the stored task.
-- **Bulk update** has no per-row version check.
+- **Bulk writes update one row at a time inside the transaction.** Fine for hundreds of tasks. For huge sets they should become background jobs (see Scaling).
 - **Rate limiting is fixed-window and Postgres-backed.** A client can burst up to twice the limit across a window boundary, and every auth request costs one extra write. At real scale, use Redis.
 - **No `/reset-password` page.** The emailed link 404s. Use the playground or curl (see Auth).
 
@@ -199,7 +203,7 @@ In priority order:
 3. **Rate limit with shared state.** A Redis token bucket per user. Two instances with their own counters make the limit meaningless.
 4. **Make big bulk operations background jobs.** `{"all": true}` on millions of rows would time out. Return `202` with a job id and work in batches.
 5. **Push changes instead of polling.** A million clients polling `/api/sync` mostly asks "anything new?" and gets no. Supabase Realtime can push `task_events`.
-6. **Build the offline client** Writes go to local storage first (IndexedDB), a durable queue holds them, and a sync engine pushes to `/api/sync` with exponential backoff and shows conflicts. Nothing waits on a round trip, and the server API for it already exists.
+6. **Build the offline client** (not built yet). Writes go to local storage first (IndexedDB), a durable queue holds them, and a sync engine pushes to `/api/sync` with exponential backoff and shows conflicts. Nothing waits on a round trip, and the server API for it already exists.
 7. **Replace `LIKE '%term%'` search.** A leading wildcard can't use an index. Use `tsvector`/`pg_trgm` or a search engine such as Meilisearch.
 8. **Cache carefully.** `tasks` is write-heavy, so a cached list goes stale right after a write. `GET /api/tasks/:id`, cleared on that task's update or delete, is a safer start.
 9. **Read replicas** once the primary is the actual bottleneck. Send list views there. Keep writes and version-sensitive reads on the primary.

@@ -300,27 +300,55 @@ describe("idempotency key is bound to the original request", () => {
   });
 });
 
+// clientQuery stand-in: the lock SELECT returns `locked` rows, the soft-delete UPDATE returns `deleted`.
+function bulkClient(locked: TaskRow[], deleted: TaskRow[] = locked) {
+  clientQuery.mockImplementation(async (sql: string) => {
+    if (/FOR UPDATE/.test(sql)) return { rows: locked, rowCount: locked.length };
+    if (/UPDATE tasks/.test(sql)) return { rows: deleted, rowCount: deleted.length };
+    return { rows: [], rowCount: 0 };
+  });
+}
+
 describe("bulk delete is a tombstone, not a hard delete", () => {
-  it("soft-deletes only the caller's live tasks and writes a task.deleted event for each", async () => {
+  it("soft-deletes the caller's tasks and writes a task.deleted event for each", async () => {
     const { softDeleteTasksByIds } = await import("../repository");
-    clientQuery.mockImplementation(async (sql: string) =>
-      /UPDATE tasks/.test(sql) ? { rows: [row("t1"), row("t2")], rowCount: 2 } : { rows: [], rowCount: 0 }
-    );
+    bulkClient([row("t1"), row("t2")]);
     vi.mocked(advanceSQL.advanceInsert).mockResolvedValue("e");
 
-    const affected = await softDeleteTasksByIds(["t1", "t2", "someone-elses"], "user-1");
+    const result = await softDeleteTasksByIds(["t1", "t2"], "user-1");
 
     const update = clientQuery.mock.calls.find(([sql]) => /UPDATE tasks/.test(sql as string));
     expect(update?.[0]).toContain("deleted_at = NOW()");
     expect(update?.[0]).toContain("created_by_id = $1");
     expect(update?.[0]).toContain("deleted_at IS NULL");
-    expect(update?.[1]).toEqual(["user-1", ["t1", "t2", "someone-elses"]]);
-    expect(affected).toBe(2);
+    expect(update?.[1]).toEqual(["user-1", ["t1", "t2"]]);
+    expect(result).toEqual({ status: "ok", affected: 2 });
 
     const events = vi.mocked(advanceSQL.advanceInsert).mock.calls.filter(([t]) => t === "task_events");
     expect(events).toHaveLength(2);
     expect(events[0][1]).toMatchObject({ event_type: "task.deleted", actor_id: "user-1" });
     expect(advanceSQL.advanceDelete).not.toHaveBeenCalled();
+  });
+
+  it("is forbidden, and changes nothing, if any id is someone else's", async () => {
+    const { softDeleteTasksByIds } = await import("../repository");
+    bulkClient([row("t1"), { ...row("theirs"), created_by_id: "user-2" }]);
+
+    const result = await softDeleteTasksByIds(["t1", "theirs"], "user-1");
+
+    expect(result).toEqual({ status: "forbidden", ids: ["theirs"] });
+    expect(clientQuery.mock.calls.some(([sql]) => /UPDATE tasks/.test(sql as string))).toBe(false);
+    expect(advanceSQL.advanceInsert).not.toHaveBeenCalled();
+  });
+
+  it("is not_found, and changes nothing, if any id is unknown or already deleted", async () => {
+    const { softDeleteTasksByIds } = await import("../repository");
+    bulkClient([row("t1")]);
+
+    const result = await softDeleteTasksByIds(["t1", "ghost"], "user-1");
+
+    expect(result).toEqual({ status: "not_found", ids: ["ghost"] });
+    expect(clientQuery.mock.calls.some(([sql]) => /UPDATE tasks/.test(sql as string))).toBe(false);
   });
 
   it("softDeleteAllTasks only ever scopes to the caller (no id filter, still owner-scoped)", async () => {
@@ -333,8 +361,60 @@ describe("bulk delete is a tombstone, not a hard delete", () => {
 
   it("does nothing for an empty id list", async () => {
     const { softDeleteTasksByIds } = await import("../repository");
-    expect(await softDeleteTasksByIds([], "user-1")).toBe(0);
+    expect(await softDeleteTasksByIds([], "user-1")).toEqual({ status: "ok", affected: 0 });
     expect(clientQuery).not.toHaveBeenCalled();
+  });
+});
+
+describe("bulk update is all-or-nothing, bumps versions and writes events", () => {
+  it("bumps each task's version and writes a task.updated event per task", async () => {
+    const { updateTasksByIds } = await import("../repository");
+    bulkClient([{ ...row("t1"), version: 4 }, { ...row("t2"), version: 7 }]);
+    vi.mocked(advanceSQL.advanceSelect).mockImplementation((async (_t: string, _c: unknown, cond: { id: string }) => [
+      row(cond.id),
+    ]) as never);
+    vi.mocked(advanceSQL.advanceInsert).mockResolvedValue("e");
+
+    const result = await updateTasksByIds(["t1", "t2", "t1"], { status: "done" }, "user-1");
+
+    expect(result).toEqual({ status: "ok", affected: 2 });
+    const updates = vi.mocked(advanceSQL.advanceUpdate).mock.calls;
+    expect(updates.map(([, data, cond]) => [(cond as { id: string }).id, (data as { version: number }).version])).toEqual([
+      ["t1", 5],
+      ["t2", 8],
+    ]);
+    const events = vi.mocked(advanceSQL.advanceInsert).mock.calls.filter(([t]) => t === "task_events");
+    expect(events.map(([, e]) => (e as { event_type: string }).event_type)).toEqual(["task.updated", "task.updated"]);
+  });
+
+  it("locks the rows in id order so two bulk requests cannot deadlock", async () => {
+    const { updateTasksByIds } = await import("../repository");
+    bulkClient([row("t1")]);
+    vi.mocked(advanceSQL.advanceSelect).mockResolvedValue([row("t1")] as never);
+    await updateTasksByIds(["t1"], { status: "done" }, "user-1");
+    const lock = clientQuery.mock.calls.find(([sql]) => /FOR UPDATE/.test(sql as string));
+    expect(lock?.[0]).toMatch(/ORDER BY id FOR UPDATE/);
+  });
+
+  it("returns conflict with the current task when a supplied version is stale, and writes nothing", async () => {
+    const { updateTasksByIds } = await import("../repository");
+    bulkClient([{ ...row("t1"), version: 5 }, row("t2")]);
+
+    const result = await updateTasksByIds(["t1", "t2"], { status: "done" }, "user-1", { t1: 4 });
+
+    expect(result).toMatchObject({ status: "conflict", conflicts: [{ id: "t1", version: 5 }] });
+    expect(advanceSQL.advanceUpdate).not.toHaveBeenCalled();
+    expect(advanceSQL.advanceInsert).not.toHaveBeenCalled();
+  });
+
+  it("is forbidden if any id is someone else's, and not_found if any is missing", async () => {
+    const { updateTasksByIds } = await import("../repository");
+    bulkClient([row("t1"), { ...row("theirs"), created_by_id: "user-2" }]);
+    expect(await updateTasksByIds(["t1", "theirs"], { status: "done" }, "user-1")).toEqual({ status: "forbidden", ids: ["theirs"] });
+
+    bulkClient([row("t1")]);
+    expect(await updateTasksByIds(["t1", "ghost"], { status: "done" }, "user-1")).toEqual({ status: "not_found", ids: ["ghost"] });
+    expect(advanceSQL.advanceUpdate).not.toHaveBeenCalled();
   });
 });
 

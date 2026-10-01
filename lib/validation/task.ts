@@ -62,10 +62,17 @@ export const patchTaskSchema = z
     message: "At least one field besides version must be provided",
   });
 
-export const bulkUpdateSchema = z.object({
-  ids: z.array(idString).min(1, "ids must contain at least one id"),
-  data: updateTaskSchema,
-});
+export const bulkUpdateSchema = z
+  .object({
+    ids: z.array(idString).min(1, "ids must contain at least one id"),
+    data: updateTaskSchema,
+    // Optional per-task version check: { "<id>": <version the client last saw> }.
+    // A task listed here that has moved on makes the whole request fail with 409.
+    versions: z.record(idString, z.number().int().positive()).optional(),
+  })
+  .refine((value) => !value.versions || Object.keys(value.versions).every((id) => value.ids.includes(id)), {
+    message: "`versions` may only contain ids that are also in `ids`",
+  });
 
 export const bulkDeleteSchema = z
   .object({
