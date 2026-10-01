@@ -6,6 +6,11 @@ vi.mock("@/lib/db/advanceSQL", () => ({
   advanceUpdate: vi.fn(),
 }));
 
+const txQuery = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/db/transaction", () => ({
+  withTransaction: vi.fn(async (fn: (client: { query: typeof txQuery }) => unknown) => fn({ query: txQuery })),
+}));
+
 const advanceSQL = await import("@/lib/db/advanceSQL");
 const {
   findUserByEmail,
@@ -16,6 +21,7 @@ const {
   findPasswordResetToken,
   markPasswordResetTokenUsed,
   invalidateOtherPasswordResetTokens,
+  resetPasswordWithToken,
 } = await import("../repository");
 
 beforeEach(() => {
@@ -153,5 +159,37 @@ describe("password reset tokens", () => {
 
       expect(advanceSQL.advanceUpdate).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("resetPasswordWithToken (one transaction)", () => {
+  beforeEach(() => txQuery.mockReset());
+
+  it("claims the token, sets the password, and closes other links, all on the same client", async () => {
+    txQuery
+      .mockResolvedValueOnce({ rows: [{ user_id: "user-1" }] })
+      .mockResolvedValueOnce({ rows: [ROW] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const result = await resetPasswordWithToken("tok-hash", "new-hash");
+
+    expect(result).toMatchObject({ status: "ok", user: { id: "user-1", email: "ada@example.com" } });
+    expect(txQuery).toHaveBeenCalledTimes(3);
+    expect(txQuery.mock.calls[0][0]).toMatch(/used_at IS NULL AND expires_at > NOW\(\)/);
+    expect(txQuery.mock.calls[0][1]).toEqual(["tok-hash"]);
+    expect(txQuery.mock.calls[1][1]).toEqual(["new-hash", "user-1"]);
+    expect(txQuery.mock.calls[2][1]).toEqual(["user-1", "tok-hash"]);
+  });
+
+  it("returns invalid_token and touches nothing else when the token is already used or expired", async () => {
+    txQuery.mockResolvedValueOnce({ rows: [] });
+    expect(await resetPasswordWithToken("tok-hash", "new-hash")).toEqual({ status: "invalid_token" });
+    expect(txQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws (so the transaction rolls back) if the user row is missing", async () => {
+    txQuery.mockResolvedValueOnce({ rows: [{ user_id: "ghost" }] }).mockResolvedValueOnce({ rows: [] });
+    await expect(resetPasswordWithToken("tok-hash", "new-hash")).rejects.toThrow(/missing user/);
+    expect(txQuery).toHaveBeenCalledTimes(2);
   });
 });

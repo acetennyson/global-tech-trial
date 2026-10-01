@@ -1,6 +1,7 @@
 import type { QueryResultRow } from "pg";
 import { advanceInsert, advanceSelect, advanceUpdate } from "@/lib/db/advanceSQL";
 import { generateId } from "@/lib/db/id";
+import { withTransaction } from "@/lib/db/transaction";
 
 const TABLE = "users";
 
@@ -121,4 +122,45 @@ export async function invalidateOtherPasswordResetTokens(userId: string, exceptT
     { used_at: new Date().toISOString() },
     { __IN: { token_hash: otherHashes } }
   );
+}
+
+export type ResetPasswordResult = { status: "ok"; user: User } | { status: "invalid_token" };
+
+// Completes a password reset in ONE transaction, so it either fully happens or not at all:
+//   1. claim the token: only an unused, unexpired row is flipped to used (single-use, race-safe)
+//   2. set the new password
+//   3. close out every other unused reset link for the same user
+// If any step throws, the whole thing rolls back and the token stays usable.
+// The claim is a conditional UPDATE, so two concurrent requests with the same token
+// can't both succeed: the second one matches zero rows.
+export async function resetPasswordWithToken(tokenHash: string, passwordHash: string): Promise<ResetPasswordResult> {
+  return withTransaction(async (client) => {
+    const claimed = await client.query<{ user_id: string }>(
+      `UPDATE password_reset_tokens
+          SET used_at = NOW()
+        WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
+        RETURNING user_id`,
+      [tokenHash]
+    );
+    const userId = claimed.rows[0]?.user_id;
+    if (!userId) return { status: "invalid_token" } as const;
+
+    const updated = await client.query<UserRowPacket>(
+      `UPDATE users SET password_hash = $1 WHERE id = $2 RETURNING *`,
+      [passwordHash, userId]
+    );
+    if (!updated.rows[0]) {
+      // can't normally happen (FK), but never leave a half-applied reset
+      throw new Error("Password reset token points at a missing user");
+    }
+
+    await client.query(
+      `UPDATE password_reset_tokens
+          SET used_at = NOW()
+        WHERE user_id = $1 AND used_at IS NULL AND token_hash <> $2`,
+      [userId, tokenHash]
+    );
+
+    return { status: "ok", user: rowToUser(updated.rows[0]) } as const;
+  });
 }
