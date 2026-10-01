@@ -1,4 +1,15 @@
--- Registered users. tasks.created_by_id is plain TEXT, not a foreign key to this table.
+-- =====================================================================
+-- RESET: drops every table so this file can be pasted into the Supabase SQL
+-- editor and rebuild the schema from scratch. THIS DELETES ALL DATA.
+-- Children first, so foreign keys don't block the drops.
+-- =====================================================================
+DROP TABLE IF EXISTS idempotency_keys;
+DROP TABLE IF EXISTS task_events;
+DROP TABLE IF EXISTS password_reset_tokens;
+DROP TABLE IF EXISTS tasks;
+DROP TABLE IF EXISTS users;
+
+-- Registered users. tasks.created_by_id is a foreign key to this table.
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
@@ -35,7 +46,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   start_time TIMESTAMPTZ NOT NULL,
   end_time TIMESTAMPTZ NOT NULL,
 
-  created_by_id TEXT NOT NULL,
+  created_by_id TEXT NOT NULL REFERENCES users (id),
   created_by_name TEXT NULL,
 
   version BIGINT NOT NULL DEFAULT 1,
