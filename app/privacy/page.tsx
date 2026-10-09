@@ -66,6 +66,13 @@ export default function PrivacyPage() {
               user agent, mainly in operational logs.
             </li>
             <li>
+              <strong>Newsletter data.</strong> If you subscribe to news and updates, usually from the form in the
+              footer of the website, we collect the email address you submit. Subscribing does not require an account,
+              and having an account does not subscribe you automatically; the two are independent. We also keep a
+              hashed, single-use unsubscribe token for each subscriber, the same way we handle password-reset tokens,
+              so that every email we send can include a working unsubscribe link.
+            </li>
+            <li>
               <strong>Website usage data.</strong> The Service does not use analytics or advertising cookies. If you
               use the in-page API playground, the requests you make are sent to the same API endpoints described above
               and are treated the same way.
@@ -79,13 +86,15 @@ export default function PrivacyPage() {
             <li>create and secure your account, and authenticate your requests;</li>
             <li>store and return your tasks, and support features such as version checks, idempotent creates, and offline sync;</li>
             <li>send transactional email, specifically password-reset links, when you ask for one;</li>
-            <li>detect and limit abusive or automated behavior, such as credential-stuffing attempts against the login endpoint;</li>
+            <li>send newsletter email, specifically news and updates about the Service, only to addresses that have subscribed and have not unsubscribed;</li>
+            <li>detect and limit abusive or automated behavior, such as credential-stuffing attempts against the login endpoint or bulk newsletter sign-up abuse;</li>
             <li>maintain the security, integrity, and availability of the Service, including through logging and debugging; and</li>
             <li>comply with legal obligations, and respond to lawful requests from public authorities.</li>
           </ul>
           <p>
-            We do not use your task content or account data to train machine-learning models, and we do not use it for
-            advertising or marketing to third parties.
+            We do not use your task content or account data to train machine-learning models, and we do not sell or
+            share your email address, including your newsletter subscription, with any third party for their own
+            marketing purposes.
           </p>
         </LegalSection>
 
@@ -93,9 +102,15 @@ export default function PrivacyPage() {
           <p>
             If you are located in the European Economic Area, the United Kingdom, or another jurisdiction with similar
             requirements, our legal bases for processing your personal data are: performance of a contract (to provide
-            the Service you sign up for), our legitimate interests (to secure the Service, prevent abuse, and operate
-            it reliably, balanced against your rights), and compliance with a legal obligation where applicable. Where
-            we rely on consent, for example for an optional communication, you may withdraw that consent at any time.
+            the Service you sign up for), consent (for the optional newsletter, described below), our legitimate
+            interests (to secure the Service, prevent abuse, and operate it reliably, balanced against your rights),
+            and compliance with a legal obligation where applicable.
+          </p>
+          <p>
+            The newsletter is processed on the basis of your consent, given when you submit your email address to the
+            subscription form. That consent is separate from, and not a condition of, creating an account or using the
+            API. You may withdraw it at any time, free of charge, by using the unsubscribe link included in every
+            newsletter email, without needing to sign in or contact us, though you are welcome to do either instead.
           </p>
         </LegalSection>
 
@@ -144,7 +159,8 @@ export default function PrivacyPage() {
             that other clients can learn about the deletion during offline sync, and is permanently removed on a
             regular cleanup schedule, typically after 30 days. Password-reset tokens expire after one hour and are
             invalidated once used. Rate-limiting counters are short-lived and are cleared automatically once the
-            relevant time window passes.
+            relevant time window passes. If you subscribe to the newsletter, we keep your email address for as long as
+            you remain subscribed, and retain a record that you unsubscribed, without further mailing you, once you do.
           </p>
           <p>
             If you delete your account, we delete or anonymize your personal data within a reasonable period, except
@@ -170,7 +186,9 @@ export default function PrivacyPage() {
             format. You can access and update most of your account data, and create or delete tasks, directly through
             the API. For anything the API does not cover, including account deletion, contact us at{" "}
             <Link href={`mailto:${legalEmail}`} className="text-[#0066cc] hover:underline">{legalEmail}</Link>, and we
-            will respond within a reasonable time and in accordance with applicable law.
+            will respond within a reasonable time and in accordance with applicable law. If you subscribed to the
+            newsletter, the quickest way to exercise your right to withdraw consent is the unsubscribe link included
+            in any newsletter email you received from us.
           </p>
           <p>
             If you are in the European Economic Area or the United Kingdom, you also have the right to lodge a

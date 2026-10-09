@@ -33,6 +33,7 @@ export const LIMITS = {
     ip: { limit: 10, windowSeconds: 60 * 60 },
     email: { limit: 3, windowSeconds: 60 * 60 },
   },
+  newsletterSubscribe: { ip: { limit: 10, windowSeconds: 60 * 60 } },
 } as const;
 
 function disabled(): boolean {

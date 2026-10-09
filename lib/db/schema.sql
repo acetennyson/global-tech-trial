@@ -8,6 +8,7 @@ DROP TABLE IF EXISTS idempotency_keys;
 DROP TABLE IF EXISTS task_events;
 DROP TABLE IF EXISTS password_reset_tokens;
 DROP TABLE IF EXISTS tasks;
+DROP TABLE IF EXISTS newsletter_subscribers;
 DROP TABLE IF EXISTS users;
 
 -- Registered users. tasks.created_by_id is a foreign key to this table.
@@ -112,6 +113,20 @@ CREATE TABLE IF NOT EXISTS idempotency_keys (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (user_id, key)
 );
+
+-- Newsletter signups. Independent of `users`: subscribing needs no account, and an
+-- account needs no subscription. Only the unsubscribe token's hash is stored, the same
+-- pattern as password_reset_tokens, so a database leak doesn't hand out working
+-- unsubscribe links.
+CREATE TABLE IF NOT EXISTS newsletter_subscribers (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  unsubscribe_token_hash TEXT NOT NULL UNIQUE,
+  subscribed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  unsubscribed_at TIMESTAMPTZ NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_newsletter_subscribers_unsubscribed_at ON newsletter_subscribers (unsubscribed_at);
 
 -- Shared counters for the rate limiter (lib/rateLimit.ts). One row per (key, window).
 -- `key` is e.g. "login:<hash of email>|<ip>"; old windows are deleted opportunistically.

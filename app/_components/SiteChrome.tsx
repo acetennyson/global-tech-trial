@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { placeLabel, site } from "@/lib/site";
+import NewsletterForm from "./NewsletterForm";
 
 const links = [
   { href: "/", label: "Home" },
@@ -32,6 +33,8 @@ export function SiteHeader() {
 export function SiteFooter() {
   return (
     <footer className="tone-gray bg-[var(--bg)] px-6 py-10 text-center text-xs text-[var(--mute)]">
+      <NewsletterForm />
+      <div className="mx-auto mb-6 h-px max-w-5xl bg-black/10" />
       <nav aria-label="Footer" className="mb-4">
         <ul className="flex flex-wrap justify-center gap-x-6 gap-y-2 text-[13px]">
           {links.map((link) => (
