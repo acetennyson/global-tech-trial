@@ -83,6 +83,20 @@ Emails are hashed in the counter keys. The IP comes from `x-real-ip` / `x-forwar
 
 **Authorization.** A task is visible to its creator, and to everyone else only if `visible: true`. Only the creator can edit or delete it (`403`). A hidden task returns `404`, the same as a missing one.
 
+## Using the API from another website (CORS)
+
+Servers, mobile apps and `curl` can call the API with just the deployed URL and a Bearer token. A website on a different domain can too, because `proxy.ts` answers the browser's preflight (`OPTIONS`) check and adds CORS headers (`lib/cors.ts`).
+
+`CORS_ALLOWED_ORIGINS` controls who may call it from a browser:
+
+| Value | Effect |
+| --- | --- |
+| unset or `*` | Any website. This is the current default. |
+| `https://a.com,https://b.com` | Only those origins. Others are blocked by the browser. |
+| set but empty | CORS off. Only same-domain pages (like the home-page playground) work in a browser. |
+
+Allowed headers are `Authorization`, `Content-Type`, `Idempotency-Key` and `X-Request-Id`. Browser code can read `X-Request-Id` and `Retry-After` from responses. Auth is a Bearer token and never a cookie, and credentials are never allowed, so `*` doesn't let a foreign page borrow someone's logged-in session. It also isn't access control: CORS only restricts browsers, and anyone can still call the API with `curl`. The rate limits and auth are what protect it. Before going to production, dont forget to check your allowlist
+
 ## Tasks API
 
 Success is `{ "data": ... }`. Failure is `{ "error": { "message", "details" } }`.
