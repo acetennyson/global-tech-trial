@@ -231,7 +231,7 @@ export default function DocsPage() {
           </Section>
 
           <p className="border-t border-[var(--line)] pt-10 text-[17px] text-[var(--mute)]">
-            Built by <Link href="/about" className="text-[#0066cc] hover:underline">{site.owner.name} at {site.organization.name}</Link>.
+            {/* Built by <Link href="/about" className="text-[#0066cc] hover:underline">{site.owner.name} at {site.organization.name}</Link>. */}
             Ready to try it? <Link href="/#account" className="text-[#0066cc] hover:underline">Open the live playground</Link>.
           </p>
         </article>
