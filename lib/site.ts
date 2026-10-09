@@ -82,8 +82,16 @@ export const site = {
 
 export const placeLabel = `${site.location.locality}, ${site.location.countryName}`;
 
+// Contact address for the legal pages (Terms, Privacy, Acceptable Use). Falls back to an
+// address on the deployed domain itself, so the pages never render without a way to reach us,
+// even before SITE_CONTACT_EMAIL is set.
+export const legalEmail = site.organization.email || `legal@${new URL(getSiteUrl()).hostname}`;
+
 export const pages = [
   { path: "/", name: "Home", priority: 1 },
   { path: "/docs", name: "API documentation", priority: 0.9 },
   { path: "/about", name: "About", priority: 0.6 },
+  { path: "/terms", name: "Terms of Use", priority: 0.3 },
+  { path: "/privacy", name: "Privacy Policy", priority: 0.3 },
+  { path: "/acceptable-use", name: "Acceptable Use Policy", priority: 0.3 },
 ] as const;

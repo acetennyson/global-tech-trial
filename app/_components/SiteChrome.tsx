@@ -7,6 +7,12 @@ const links = [
   { href: "/about", label: "About" },
 ];
 
+const legalLinks = [
+  { href: "/terms", label: "Terms of Use" },
+  { href: "/privacy", label: "Privacy Policy" },
+  { href: "/acceptable-use", label: "Acceptable Use" },
+];
+
 // Header for the pages that are not the home page (the home page has its own, with in-page anchors).
 export function SiteHeader() {
   return (
@@ -29,6 +35,13 @@ export function SiteFooter() {
       <nav aria-label="Footer" className="mb-4">
         <ul className="flex flex-wrap justify-center gap-x-6 gap-y-2 text-[13px]">
           {links.map((link) => (
+            <li key={link.href}><Link href={link.href} className="text-[#0066cc] hover:underline">{link.label}</Link></li>
+          ))}
+        </ul>
+      </nav>
+      <nav aria-label="Legal" className="mb-4">
+        <ul className="flex flex-wrap justify-center gap-x-6 gap-y-2 text-[13px]">
+          {legalLinks.map((link) => (
             <li key={link.href}><Link href={link.href} className="text-[#0066cc] hover:underline">{link.label}</Link></li>
           ))}
         </ul>
