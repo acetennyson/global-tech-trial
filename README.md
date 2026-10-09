@@ -95,7 +95,7 @@ Servers, mobile apps and `curl` can call the API with just the deployed URL and 
 | `https://a.com,https://b.com` | Only those origins. Others are blocked by the browser. |
 | set but empty | CORS off. Only same-domain pages (like the home-page playground) work in a browser. |
 
-Allowed headers are `Authorization`, `Content-Type`, `Idempotency-Key` and `X-Request-Id`. Browser code can read `X-Request-Id` and `Retry-After` from responses. Auth is a Bearer token and never a cookie, and credentials are never allowed, so `*` doesn't let a foreign page borrow someone's logged-in session. It also isn't access control: CORS only restricts browsers, and anyone can still call the API with `curl`. The rate limits and auth are what protect it. Before going to production, dont forget to check your allowlist
+Allowed headers are `Authorization`, `Content-Type`, `Idempotency-Key` and `X-Request-Id`. Browser code can read `X-Request-Id` and `Retry-After` from responses. Auth is a Bearer token and never a cookie, and credentials are never allowed, so `*` doesn't let a foreign page borrow someone's logged-in session. It also isn't access control: CORS only restricts browsers, and anyone can still call the API with `curl`. The rate limits and auth are what protect it. Before going to production, set the allowlist to the domains you actually trust.
 
 ## Tasks API
 
