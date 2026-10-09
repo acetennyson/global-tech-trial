@@ -34,8 +34,8 @@ export function SiteFooter() {
         </ul>
       </nav>
       <p>
-        {site.name} is built by <Link href="/about" className="text-[#0066cc] hover:underline">{site.owner.name}</Link> at{" "}
-        {site.organization.name}, {placeLabel}.
+        {site.name} is built by <Link href="https://adodanielnj.vercel.app" className="text-[#0066cc] hover:underline">{site.owner.name}</Link> {/* at{" "}
+        {site.organization.name}, {placeLabel} */}.
       </p>
       <p className="mt-2">Built with Next.js route handlers and Postgres.</p>
     </footer>
