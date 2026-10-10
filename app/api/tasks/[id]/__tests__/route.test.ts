@@ -7,8 +7,10 @@ vi.mock("@/lib/tasks/repository", () => ({
   updateTaskWithVersion: vi.fn(),
   softDeleteTaskById: vi.fn(),
 }));
+vi.mock("@/lib/users/repository", () => ({ findUserById: vi.fn().mockResolvedValue({ emailVerifiedAt: "2026-01-01T00:00:00Z" }) }));
 
 const repo = await import("@/lib/tasks/repository");
+const usersRepo = await import("@/lib/users/repository");
 const { GET, PATCH, DELETE } = await import("../route");
 
 const authHeaders = authHeaderFor({ id: "user-1", name: "Ada" });
@@ -171,5 +173,41 @@ describe("DELETE /api/tasks/:id", () => {
     vi.mocked(repo.softDeleteTaskById).mockResolvedValue({ status: "forbidden" });
     const res = await DELETE(req(`http://localhost/api/tasks/${sampleTask.id}`, { method: "DELETE" }), ctx(sampleTask.id));
     expect(res.status).toBe(403);
+  });
+});
+
+describe("email verification gate", () => {
+  it("PATCH returns 403 for an unverified caller and never reaches the repository", async () => {
+    vi.mocked(usersRepo.findUserById).mockResolvedValueOnce({ emailVerifiedAt: null } as never);
+
+    const res = await PATCH(
+      req(`http://localhost/api/tasks/${sampleTask.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ version: 1, title: "New title" }),
+      }),
+      ctx(sampleTask.id)
+    );
+
+    expect(res.status).toBe(403);
+    expect(repo.updateTaskWithVersion).not.toHaveBeenCalled();
+  });
+
+  it("DELETE returns 403 for an unverified caller and never reaches the repository", async () => {
+    vi.mocked(usersRepo.findUserById).mockResolvedValueOnce({ emailVerifiedAt: null } as never);
+
+    const res = await DELETE(req(`http://localhost/api/tasks/${sampleTask.id}`, { method: "DELETE" }), ctx(sampleTask.id));
+
+    expect(res.status).toBe(403);
+    expect(repo.softDeleteTaskById).not.toHaveBeenCalled();
+  });
+
+  it("GET still works for an unverified caller: reads aren't gated", async () => {
+    vi.mocked(usersRepo.findUserById).mockResolvedValueOnce({ emailVerifiedAt: null } as never);
+    vi.mocked(repo.getVisibleTaskById).mockResolvedValue(sampleTask);
+
+    const res = await GET(req(`http://localhost/api/tasks/${sampleTask.id}`), ctx(sampleTask.id));
+
+    expect(res.status).toBe(200);
   });
 });

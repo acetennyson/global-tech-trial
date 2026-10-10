@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
-import { ForbiddenError, UnauthenticatedError } from "./auth";
+import { EmailNotVerifiedError, ForbiddenError, UnauthenticatedError } from "./auth";
 import { IdempotencyKeyReuseError } from "./idempotency";
 import { logger } from "./logger";
 
@@ -23,6 +23,9 @@ export function toErrorResponse(error: unknown) {
     return fail(401, error.message);
   }
   if (error instanceof ForbiddenError) {
+    return fail(403, error.message);
+  }
+  if (error instanceof EmailNotVerifiedError) {
     return fail(403, error.message);
   }
   if (error instanceof IdempotencyKeyReuseError) {

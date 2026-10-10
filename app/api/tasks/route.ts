@@ -1,5 +1,5 @@
 import { withRequestLogging } from "@/lib/observability";
-import { resolveAuthUser } from "@/lib/auth";
+import { requireVerifiedEmail, resolveAuthUser } from "@/lib/auth";
 import { fail, ok, toErrorResponse } from "@/lib/http";
 import { createTaskIdempotent, type BulkOutcome, listTasks, softDeleteAllTasks, softDeleteTasksByIds, updateTasksByIds } from "@/lib/tasks/repository";
 import { bulkDeleteSchema, bulkUpdateSchema, createTaskSchema, searchParamsToObject, taskFiltersSchema } from "@/lib/validation/task";
@@ -22,6 +22,7 @@ async function handleGET(request: Request) {
 async function handlePOST(request: Request) {
   try {
     const user = resolveAuthUser(request);
+    await requireVerifiedEmail(user.id);
     const idempotencyKey = request.headers.get("idempotency-key")?.trim() || undefined;
     const body = await request.json();
     const input = createTaskSchema.parse(body);
@@ -51,6 +52,7 @@ function bulkFailure(result: Exclude<BulkOutcome, { status: "ok" }>, verb: "edit
 async function handlePATCH(request: Request) {
   try {
     const user = resolveAuthUser(request);
+    await requireVerifiedEmail(user.id);
     const body = await request.json();
     const { ids, data, versions } = bulkUpdateSchema.parse(body);
     const result = await updateTasksByIds(ids, data, user.id, versions);
@@ -65,6 +67,7 @@ async function handlePATCH(request: Request) {
 async function handleDELETE(request: Request) {
   try {
     const user = resolveAuthUser(request);
+    await requireVerifiedEmail(user.id);
     const body = await request.json().catch(() => ({}));
     const parsed = bulkDeleteSchema.parse(body);
     if (parsed.all) return ok({ affected: await softDeleteAllTasks(user.id) });

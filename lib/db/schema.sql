@@ -7,6 +7,7 @@ DROP TABLE IF EXISTS rate_limits;
 DROP TABLE IF EXISTS idempotency_keys;
 DROP TABLE IF EXISTS task_events;
 DROP TABLE IF EXISTS password_reset_tokens;
+DROP TABLE IF EXISTS email_verification_tokens;
 DROP TABLE IF EXISTS tasks;
 DROP TABLE IF EXISTS newsletter_subscribers;
 DROP TABLE IF EXISTS users;
@@ -17,6 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
   name TEXT NULL,
+  email_verified_at TIMESTAMPTZ NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -32,6 +34,19 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 );
 
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user ON password_reset_tokens (user_id);
+
+-- Email verification links. Same shape as password_reset_tokens, and the same reason:
+-- only the hash is stored, single-use via used_at, time-limited via expires_at.
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  user_id TEXT NOT NULL REFERENCES users (id),
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_email_verification_tokens_user ON email_verification_tokens (user_id);
 
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,

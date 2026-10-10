@@ -34,6 +34,15 @@ export const LIMITS = {
     email: { limit: 3, windowSeconds: 60 * 60 },
   },
   newsletterSubscribe: { ip: { limit: 10, windowSeconds: 60 * 60 } },
+  resendVerification: {
+    ip: { limit: 10, windowSeconds: 60 * 60 },
+    email: { limit: 3, windowSeconds: 60 * 60 },
+  },
+  // /api/auth/me: generous (it's a cheap, authenticated read a client might poll right
+  // after verifying or resetting), but still bounded per account so one leaked token
+  // can't be used to hammer the users table. Keyed by user id, not IP, since every
+  // caller here already has a valid Bearer token.
+  me: { user: { limit: 60, windowSeconds: 60 } },
 } as const;
 
 function disabled(): boolean {

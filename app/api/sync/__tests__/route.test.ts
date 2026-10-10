@@ -3,9 +3,11 @@ import { authHeaderFor } from "@/lib/testUtils/authHeader";
 
 vi.mock("@/lib/sync/service", () => ({ applySyncBatch: vi.fn() }));
 vi.mock("@/lib/sync/eventsRepository", () => ({ listEventsSince: vi.fn() }));
+vi.mock("@/lib/users/repository", () => ({ findUserById: vi.fn().mockResolvedValue({ emailVerifiedAt: "2026-01-01T00:00:00Z" }) }));
 
 const service = await import("@/lib/sync/service");
 const eventsRepo = await import("@/lib/sync/eventsRepository");
+const usersRepo = await import("@/lib/users/repository");
 const { GET, POST } = await import("../route");
 
 const authHeaders = authHeaderFor({ id: "user-1", name: "Ada" });
@@ -101,5 +103,42 @@ describe("GET /api/sync", () => {
     await GET(request);
 
     expect(eventsRepo.listEventsSince).toHaveBeenCalledWith(null, "user-1", 200);
+  });
+});
+
+describe("email verification gate", () => {
+  it("POST (push) returns 403 for an unverified caller and never reaches the service", async () => {
+    vi.mocked(usersRepo.findUserById).mockResolvedValueOnce({ emailVerifiedAt: null } as never);
+
+    const request = new Request("http://localhost/api/sync", {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        operations: [
+          {
+            id: "op-1",
+            entityId: "t1",
+            entityType: "task",
+            operation: "create",
+            payload: { title: "x", startTime: "2026-01-01T00:00:00Z", endTime: "2026-01-01T01:00:00Z" },
+          },
+        ],
+      }),
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(403);
+    expect(service.applySyncBatch).not.toHaveBeenCalled();
+  });
+
+  it("GET (pull) still works for an unverified caller: reads aren't gated", async () => {
+    vi.mocked(usersRepo.findUserById).mockResolvedValueOnce({ emailVerifiedAt: null } as never);
+    vi.mocked(eventsRepo.listEventsSince).mockResolvedValue({ events: [], nextCursor: null });
+
+    const request = new Request("http://localhost/api/sync", { headers: authHeaders });
+    const response = await GET(request);
+
+    expect(response.status).toBe(200);
   });
 });

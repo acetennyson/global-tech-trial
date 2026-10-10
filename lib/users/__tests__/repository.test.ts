@@ -42,7 +42,7 @@ describe("findUserByEmail", () => {
     const user = await findUserByEmail("ADA@Example.com");
 
     expect(advanceSQL.advanceSelect).toHaveBeenCalledWith("users", "*", { email: "ada@example.com" });
-    expect(user).toEqual({ id: "user-1", email: "ada@example.com", passwordHash: "hashed", name: "Ada", createdAt: "2026-01-01T00:00:00Z" });
+    expect(user).toEqual({ id: "user-1", email: "ada@example.com", passwordHash: "hashed", name: "Ada", emailVerifiedAt: null, createdAt: "2026-01-01T00:00:00Z" });
   });
 
   it("returns null when no user matches", async () => {

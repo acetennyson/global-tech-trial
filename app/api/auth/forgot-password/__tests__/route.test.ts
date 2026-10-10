@@ -34,7 +34,7 @@ function request(body: unknown) {
   });
 }
 
-const EXISTING_USER = { id: "user-1", email: "ada@example.com", passwordHash: "hashed", name: "Ada", createdAt: "2026-01-01T00:00:00Z" };
+const EXISTING_USER = { id: "user-1", email: "ada@example.com", passwordHash: "hashed", name: "Ada", emailVerifiedAt: null, createdAt: "2026-01-01T00:00:00Z" };
 
 describe("POST /api/auth/forgot-password", () => {
   it("creates a reset token and sends an email when the account exists", async () => {

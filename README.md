@@ -66,8 +66,14 @@ TOKEN=$(curl -s -X POST http://localhost:3000/api/auth/login -H "content-type: a
 | `POST /api/auth/login`          | Same response. A wrong password and an unknown email give the same `401` and take the same time (a dummy hash is compared).               |
 | `POST /api/auth/forgot-password`| Always `200` with the same message, whether or not the account exists, **including when the email fails to send** (the error is only logged). A `500` for real accounts would reveal who is registered. |
 | `POST /api/auth/reset-password` | `{ token, password }`. `400` for a missing, used or expired token (one generic message). On success the token is burned, every other reset link for that user stops working, and you get `{ user, token }`. |
+| `GET /api/auth/verify-email`    | `?token=...`. For the link in the verification email: claims the token and `303`s to `/verify-email/confirmed?status=ok\|invalid`. |
+| `POST /api/auth/verify-email`   | `{ token }`. Same claim, for a client that already has the raw token instead of a browser following the link. `400` for a missing, used or expired token. On success you get `{ user, token }`, same shape as `/login`. No rate limit: the token itself (256 random bits, single-use) is the protection, the same reasoning as `/reset-password`. |
+| `POST /api/auth/resend-verification` | `{ email }`. Always `200` with the same message, whether or not the account exists or is already verified, for the same reason `/forgot-password` does. |
+| `GET /api/auth/me`              | No body. Returns the caller's own `{ id, email, name, emailVerified, emailVerifiedAt, createdAt }`, read fresh from the database. For checking whether a verification (or anything else about the account) landed, without decoding the JWT or logging in again — the token never carries `emailVerified` (see below). Rate-limited per account, not per IP. |
 
-Reset tokens are random, stored hashed, single-use and expire after 1 hour. Passwords are hashed with bcrypt (cost 12). Resetting runs in one transaction (claim the token, set the password, close the user's other links), so it fully happens or not at all, and two requests with the same link can't both succeed.
+Reset tokens are random, stored hashed, single-use and expire after 1 hour; verification tokens work the same way but expire after 24 hours. Passwords are hashed with bcrypt (cost 12). Resetting and verifying each run in one transaction (claim the token, apply the change), so it fully happens or not at all, and two requests with the same link can't both succeed.
+
+**Email verification.** Registering creates the account immediately and returns a usable token right away; `email_verified_at` starts `NULL`. Signing in and reading tasks never require verification. Creating, editing, deleting, bulk-editing, and syncing tasks do: an unverified caller gets `403` from `requireVerifiedEmail()` (`lib/auth/index.ts`). That check reads `email_verified_at` straight from the database on every one of those requests rather than from a claim baked into the JWT, so verifying (via either endpoint above) takes effect on the caller's very next request, no re-login needed.
 
 **Rate limits.** Counters live in the `rate_limits` table, so all serverless instances share them. Over a limit you get `429` with a `Retry-After` header.
 
@@ -76,10 +82,15 @@ Reset tokens are random, stored hashed, single-use and expire after 1 hour. Pass
 | `register` | 5 per hour per IP | |
 | `login` | 5 failures per 15 min per email + IP, 30 per 15 min per IP | Only failed logins count. Keyed on email + IP so an attacker can't lock someone out from elsewhere. |
 | `forgot-password` | 10 per hour per IP (`429`), 3 per hour per email | Over the per-email limit it still returns the normal `200` and silently sends nothing. A `429` there would reveal the email is registered. Counted for unknown emails too. |
+| `resend-verification` | 10 per hour per IP (`429`), 3 per hour per email | Same reasoning as `forgot-password`. |
+| `newsletter/subscribe` | 10 per hour per IP (`429`) | |
+| `auth/me` | 60 per minute per account | Keyed by the caller's user id, not IP: every request here already carries a valid token, so the limit should travel with the account, not the network it's called from. |
 
 Emails are hashed in the counter keys. The IP comes from `x-real-ip` / `x-forwarded-for`, which Vercel sets and clients can't forge. If you self-host, make your proxy overwrite them. The limiter fails open if the database errors. Set `RATE_LIMIT_DISABLED=true` to switch it off for local testing. Limits are demo-sized and live in `lib/rateLimit.ts`.
 
 **Reset UI.** The email links to `${APP_URL}/reset-password?token=...`, and that page does not exist (the link returns a 404). To finish a reset, copy the token from the link into the "Forgot your password?" section of the home-page playground, or call `POST /api/auth/reset-password` with curl. A real page would only need to read `token` from the URL and POST it.
+
+**Verify UI.** Unlike reset, the verification link (`${APP_URL}/api/auth/verify-email?token=...`) works as a plain click: it's a `GET` route, not a missing page, and it redirects straight to a real confirmation page. The `POST /api/auth/verify-email` variant above is there for a client that has the raw token some other way (pasted into the playground, a mobile deep link) and wants `{ user, token }` back immediately instead of waiting for its next ordinary request.
 
 **Authorization.** A task is visible to its creator, and to everyone else only if `visible: true`. Only the creator can edit or delete it (`403`). A hidden task returns `404`, the same as a missing one.
 

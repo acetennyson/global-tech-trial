@@ -10,8 +10,10 @@ vi.mock("@/lib/tasks/repository", () => ({
   softDeleteTasksByIds: vi.fn(),
   softDeleteAllTasks: vi.fn(),
 }));
+vi.mock("@/lib/users/repository", () => ({ findUserById: vi.fn().mockResolvedValue({ emailVerifiedAt: "2026-01-01T00:00:00Z" }) }));
 
 const repo = await import("@/lib/tasks/repository");
+const usersRepo = await import("@/lib/users/repository");
 const { GET, POST, PATCH, DELETE } = await import("../route");
 
 const authHeaders = authHeaderFor({ id: "user-1", name: "Ada" });
@@ -313,5 +315,31 @@ describe("DELETE /api/tasks (bulk)", () => {
     expect(res.status).toBe(401);
     expect(repo.softDeleteAllTasks).not.toHaveBeenCalled();
     expect(repo.softDeleteTasksByIds).not.toHaveBeenCalled();
+  });
+});
+
+describe("email verification gate", () => {
+  it("POST (create) returns 403 for an unverified caller and never reaches the repository", async () => {
+    vi.mocked(usersRepo.findUserById).mockResolvedValueOnce({ emailVerifiedAt: null } as never);
+
+    const res = await POST(
+      new Request("http://localhost/api/tasks", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...authHeaders },
+        body: JSON.stringify({ title: "Ship it", startTime: "2026-01-01T09:00:00Z", endTime: "2026-01-01T17:00:00Z" }),
+      })
+    );
+
+    expect(res.status).toBe(403);
+    expect(repo.createTaskIdempotent).not.toHaveBeenCalled();
+  });
+
+  it("GET (list) still works for an unverified caller: reads aren't gated", async () => {
+    vi.mocked(usersRepo.findUserById).mockResolvedValueOnce({ emailVerifiedAt: null } as never);
+    vi.mocked(repo.listTasks).mockResolvedValue(samplePage);
+
+    const res = await GET(new Request("http://localhost/api/tasks", { headers: authHeaders }));
+
+    expect(res.status).toBe(200);
   });
 });

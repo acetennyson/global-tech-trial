@@ -10,6 +10,7 @@ export interface User {
   email: string;
   passwordHash: string;
   name: string | null;
+  emailVerifiedAt: string | null;
   createdAt: string;
 }
 
@@ -18,6 +19,7 @@ interface UserRow {
   email: string;
   password_hash: string;
   name: string | null;
+  email_verified_at: string | null;
   created_at: string;
 }
 
@@ -29,6 +31,7 @@ function rowToUser(row: UserRow): User {
     email: row.email,
     passwordHash: row.password_hash,
     name: row.name,
+    emailVerifiedAt: row.email_verified_at == null ? null : String(row.email_verified_at),
     createdAt: String(row.created_at),
   };
 }
@@ -156,6 +159,54 @@ export async function resetPasswordWithToken(tokenHash: string, passwordHash: st
 
     await client.query(
       `UPDATE password_reset_tokens
+          SET used_at = NOW()
+        WHERE user_id = $1 AND used_at IS NULL AND token_hash <> $2`,
+      [userId, tokenHash]
+    );
+
+    return { status: "ok", user: rowToUser(updated.rows[0]) } as const;
+  });
+}
+
+// --- email verification ---
+
+export async function createEmailVerificationToken(userId: string, tokenHash: string, expiresAt: Date): Promise<void> {
+  await advanceInsert("email_verification_tokens", {
+    id: generateId(),
+    token_hash: tokenHash,
+    user_id: userId,
+    expires_at: expiresAt.toISOString(),
+  });
+}
+
+export type VerifyEmailResult = { status: "ok"; user: User } | { status: "invalid_token" };
+
+// Same transactional shape as resetPasswordWithToken: the token claim (UPDATE ...
+// WHERE used_at IS NULL AND expires_at > NOW()) is what makes it single-use and
+// race-safe, not an earlier SELECT. Also closes out the user's other unused
+// verification links, the same way a password reset closes out its siblings.
+export async function verifyEmailWithToken(tokenHash: string): Promise<VerifyEmailResult> {
+  return withTransaction(async (client) => {
+    const claimed = await client.query<{ user_id: string }>(
+      `UPDATE email_verification_tokens
+          SET used_at = NOW()
+        WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
+        RETURNING user_id`,
+      [tokenHash]
+    );
+    const userId = claimed.rows[0]?.user_id;
+    if (!userId) return { status: "invalid_token" } as const;
+
+    const updated = await client.query<UserRowPacket>(
+      `UPDATE users SET email_verified_at = COALESCE(email_verified_at, NOW()) WHERE id = $1 RETURNING *`,
+      [userId]
+    );
+    if (!updated.rows[0]) {
+      throw new Error("Email verification token points at a missing user");
+    }
+
+    await client.query(
+      `UPDATE email_verification_tokens
           SET used_at = NOW()
         WHERE user_id = $1 AND used_at IS NULL AND token_hash <> $2`,
       [userId, tokenHash]

@@ -39,6 +39,7 @@ describe("POST /api/auth/login", () => {
       email: "ada@example.com",
       passwordHash,
       name: "Ada",
+      emailVerifiedAt: null,
       createdAt: "2026-01-01T00:00:00Z",
     });
 
@@ -56,6 +57,7 @@ describe("POST /api/auth/login", () => {
       email: "ada@example.com",
       passwordHash,
       name: "Ada",
+      emailVerifiedAt: null,
       createdAt: "2026-01-01T00:00:00Z",
     });
 
@@ -97,7 +99,7 @@ describe("POST /api/auth/login", () => {
     vi.mocked(rateLimit.checkRateLimit).mockResolvedValue({ allowed: true });
     const passwordHash = await hashPassword("hunter2hunter2");
     vi.mocked(usersRepo.findUserByEmail).mockResolvedValue({
-      id: "user-1", email: "ada@example.com", passwordHash, name: "Ada", createdAt: "2026-01-01T00:00:00Z",
+      id: "user-1", email: "ada@example.com", passwordHash, name: "Ada", emailVerifiedAt: null, createdAt: "2026-01-01T00:00:00Z",
     });
     const ok = await POST(request({ email: "ada@example.com", password: "hunter2hunter2" }));
     expect(ok.status).toBe(200);

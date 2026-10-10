@@ -23,7 +23,7 @@ function request(body: unknown) {
 }
 
 const VALID_TOKEN = "a".repeat(64);
-const USER = { id: "user-1", email: "ada@example.com", name: "Ada", passwordHash: "old-hash", createdAt: "2026-01-01T00:00:00Z" };
+const USER = { id: "user-1", email: "ada@example.com", name: "Ada", passwordHash: "old-hash", emailVerifiedAt: null, createdAt: "2026-01-01T00:00:00Z" };
 
 function validRecord(overrides: Partial<{ usedAt: string | null; expiresAt: string }> = {}) {
   return {

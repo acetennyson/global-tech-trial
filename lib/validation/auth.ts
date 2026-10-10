@@ -22,3 +22,11 @@ export const resetPasswordSchema = z.object({
   // same rule as registerSchema.password
   password: z.string().min(8, "Password must be at least 8 characters"),
 });
+
+export const verifyEmailSchema = z.object({
+  token: z.string().trim().min(1, "token is required"),
+});
+
+export const resendVerificationSchema = z.object({
+  email: z.string().trim().toLowerCase().email("Must be a valid email address"),
+});

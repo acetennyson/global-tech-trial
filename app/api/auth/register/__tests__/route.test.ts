@@ -33,7 +33,7 @@ describe("POST /api/auth/register", () => {
   it("creates a user and returns a usable token", async () => {
     vi.mocked(usersRepo.createUser).mockResolvedValue({
       status: "ok",
-      user: { id: "user-1", email: "ada@example.com", passwordHash: "hashed", name: "Ada", createdAt: "2026-01-01T00:00:00Z" },
+      user: { id: "user-1", email: "ada@example.com", passwordHash: "hashed", name: "Ada", emailVerifiedAt: null, createdAt: "2026-01-01T00:00:00Z" },
     });
 
     const response = await POST(request({ email: "ada@example.com", password: "hunter2hunter2", name: "Ada" }));

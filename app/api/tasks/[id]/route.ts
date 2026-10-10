@@ -1,5 +1,5 @@
 import { withRequestLogging } from "@/lib/observability";
-import { resolveAuthUser } from "@/lib/auth";
+import { requireVerifiedEmail, resolveAuthUser } from "@/lib/auth";
 import { fail, ok, toErrorResponse } from "@/lib/http";
 import { getVisibleTaskById, softDeleteTaskById, updateTaskWithVersion } from "@/lib/tasks/repository";
 import { patchTaskSchema } from "@/lib/validation/task";
@@ -32,6 +32,7 @@ async function handleGET(request: Request, { params }: Params) {
 async function handlePATCH(request: Request, { params }: Params) {
   try {
     const user = resolveAuthUser(request);
+    await requireVerifiedEmail(user.id);
     const id = parseId((await params).id);
     if (id === null) return fail(400, "id must be a non-empty string");
 
@@ -60,6 +61,7 @@ async function handlePATCH(request: Request, { params }: Params) {
 async function handleDELETE(request: Request, { params }: Params) {
   try {
     const user = resolveAuthUser(request);
+    await requireVerifiedEmail(user.id);
     const id = parseId((await params).id);
     if (id === null) return fail(400, "id must be a non-empty string");
 

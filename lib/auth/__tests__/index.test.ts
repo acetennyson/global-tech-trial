@@ -1,6 +1,10 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { resolveAuthUser, UnauthenticatedError } from "../index";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { signToken } from "../jwt";
+
+vi.mock("@/lib/users/repository", () => ({ findUserById: vi.fn() }));
+
+const usersRepo = await import("@/lib/users/repository");
+const { EmailNotVerifiedError, requireVerifiedEmail, resolveAuthUser, UnauthenticatedError } = await import("../index");
 
 beforeEach(() => {
   process.env.JWT_SECRET = "test-secret-do-not-use-in-production";
@@ -34,5 +38,43 @@ describe("resolveAuthUser", () => {
     const headers = new Headers({ "x-user-id": "user-1", "x-user-name": "Ada" });
     const request = new Request("http://localhost/api/tasks", { headers });
     expect(() => resolveAuthUser(request)).toThrow(UnauthenticatedError);
+  });
+});
+
+describe("requireVerifiedEmail", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("resolves without throwing for a user with email_verified_at set", async () => {
+    vi.mocked(usersRepo.findUserById).mockResolvedValue({
+      id: "user-1",
+      email: "ada@example.com",
+      passwordHash: "hashed",
+      name: "Ada",
+      emailVerifiedAt: "2026-01-01T00:00:00Z",
+      createdAt: "2026-01-01T00:00:00Z",
+    });
+
+    await expect(requireVerifiedEmail("user-1")).resolves.toBeUndefined();
+  });
+
+  it("throws EmailNotVerifiedError for a user with no email_verified_at", async () => {
+    vi.mocked(usersRepo.findUserById).mockResolvedValue({
+      id: "user-1",
+      email: "ada@example.com",
+      passwordHash: "hashed",
+      name: "Ada",
+      emailVerifiedAt: null,
+      createdAt: "2026-01-01T00:00:00Z",
+    });
+
+    await expect(requireVerifiedEmail("user-1")).rejects.toThrow(EmailNotVerifiedError);
+  });
+
+  it("throws EmailNotVerifiedError when the user can't be found (fails closed, not open)", async () => {
+    vi.mocked(usersRepo.findUserById).mockResolvedValue(null);
+
+    await expect(requireVerifiedEmail("ghost")).rejects.toThrow(EmailNotVerifiedError);
   });
 });

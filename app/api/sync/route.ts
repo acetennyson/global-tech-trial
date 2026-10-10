@@ -1,5 +1,5 @@
 import { withRequestLogging } from "@/lib/observability";
-import { resolveAuthUser } from "@/lib/auth";
+import { requireVerifiedEmail, resolveAuthUser } from "@/lib/auth";
 import { ok, toErrorResponse } from "@/lib/http";
 import { applySyncBatch } from "@/lib/sync/service";
 import { listEventsSince } from "@/lib/sync/eventsRepository";
@@ -10,6 +10,7 @@ import { syncBatchSchema, syncPullQuerySchema } from "@/lib/sync/validation";
 async function handlePOST(request: Request) {
   try {
     const user = resolveAuthUser(request);
+    await requireVerifiedEmail(user.id);
     const body = await request.json();
     const { operations } = syncBatchSchema.parse(body);
     const result = await applySyncBatch(operations, user);
