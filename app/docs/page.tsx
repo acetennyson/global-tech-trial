@@ -46,14 +46,48 @@ const syncExample = `curl -X POST ${base}/api/sync \\
 
 curl "${base}/api/sync?cursor=<cursor>" -H "Authorization: Bearer $TOKEN"`;
 
+const forgotPasswordExample = `curl -X POST ${base}/api/auth/forgot-password \\
+  -H "content-type: application/json" \\
+  -d '{"email":"ada@example.com"}'
+# always 200, whether or not that email is registered
+
+curl -X POST ${base}/api/auth/reset-password \\
+  -H "content-type: application/json" \\
+  -d '{"token":"<token from the email>","password":"a new strong password"}'`;
+
+const verifyEmailExample = `# resend the verification email if the link expired or never arrived
+curl -X POST ${base}/api/auth/resend-verification \\
+  -H "content-type: application/json" \\
+  -d '{"email":"ada@example.com"}'
+
+# verify with the token from the emailed link
+curl -X POST ${base}/api/auth/verify-email \\
+  -H "content-type: application/json" \\
+  -d '{"token":"<token from the email>"}'
+# { data: { user, token } } — a fresh token, no re-login needed
+
+# the emailed link itself is a plain GET, meant to be clicked, not called from code:
+# it redirects a browser straight to a confirmation page instead of returning JSON
+# GET ${base}/api/auth/verify-email?token=<token from the email>`;
+
+const meExample = `curl "${base}/api/auth/me" -H "Authorization: Bearer $TOKEN"
+# { data: { id, email, name, emailVerified, emailVerifiedAt, createdAt } }`;
+
+const newsletterExample = `curl -X POST ${base}/api/newsletter/subscribe \\
+  -H "content-type: application/json" \\
+  -d '{"email":"ada@example.com"}'
+# always 200, whether or not that email was already subscribed`;
+
 const toc = [
   ["overview", "Overview"],
   ["authentication", "Authentication"],
+  ["email-verification", "Email verification"],
   ["tasks", "Tasks"],
   ["idempotency", "Idempotent creates"],
   ["versions", "Version-checked edits"],
   ["bulk", "Bulk operations"],
   ["sync", "Offline sync"],
+  ["newsletter", "Newsletter"],
   ["rate-limits", "Rate limits"],
   ["cors", "Using the API from a website"],
   ["errors", "Errors and request IDs"],
@@ -132,6 +166,32 @@ export default function DocsPage() {
               message, so it never reveals which emails are registered. The emailed token is single-use and expires after one
               hour. Finish with <code>POST /api/auth/reset-password</code> and <code>{`{ token, password }`}</code>.
             </p>
+            <Code>{forgotPasswordExample}</Code>
+          </Section>
+
+          <Section id="email-verification" title="Email verification">
+            <p>
+              Registering sends a verification email. You can sign in and read right away with an unverified account, but
+              creating, editing, deleting or syncing tasks needs a verified email first (<code>403</code> otherwise). The
+              check runs fresh on every request, so verifying takes effect immediately with no re-login required.
+            </p>
+            <p>
+              The emailed link is a plain <code>GET /api/auth/verify-email?token=...</code>, meant to be clicked: it verifies
+              the account and redirects to a confirmation page. <code>POST /api/auth/verify-email</code> with{" "}
+              <code>{`{ token }`}</code> is the same check for a client that already has the raw token and wants a fresh,
+              verified JWT back directly, as <code>{`{ user, token }`}</code>. Lost or expired the email?{" "}
+              <code>POST /api/auth/resend-verification</code> with <code>{`{ email }`}</code> sends a new one, answering{" "}
+              <code>200</code> either way so it never reveals whether that email is registered or already verified. Neither
+              verify-email route is rate-limited: the token is 256 random bits and single-use, so limiting by IP or email
+              would only let an attacker lock out the real owner.
+            </p>
+            <Code>{verifyEmailExample}</Code>
+            <p>
+              <code>GET /api/auth/me</code> (auth required) returns the caller&apos;s own profile, including{" "}
+              <code>emailVerified</code> and <code>emailVerifiedAt</code>, so a client can check status without decoding its
+              token or re-logging in.
+            </p>
+            <Code>{meExample}</Code>
           </Section>
 
           <Section id="tasks" title="Tasks">
@@ -198,12 +258,25 @@ export default function DocsPage() {
             <Code>{syncExample}</Code>
           </Section>
 
+          <Section id="newsletter" title="Newsletter">
+            <p>
+              <code>POST /api/newsletter/subscribe</code> with <code>{`{ email }`}</code> adds an address to the mailing
+              list. Like <code>forgot-password</code>, it always answers <code>200</code> with the same message, so it never
+              reveals who is already subscribed. Every newsletter email includes a one-click unsubscribe link (
+              <code>GET /api/newsletter/unsubscribe?token=...</code>) built from a single-use token, no login required.
+            </p>
+            <Code>{newsletterExample}</Code>
+          </Section>
+
           <Section id="rate-limits" title="Rate limits">
             <p>Over a limit you get <code>429</code> with a <code>Retry-After</code> header.</p>
             <ul className="list-disc space-y-2 pl-6">
               <li><code>register</code>: 5 per hour per IP address.</li>
               <li><code>login</code>: 5 failed attempts per 15 minutes per email and IP, and 30 per 15 minutes per IP. Only failed logins count.</li>
               <li><code>forgot-password</code>: 10 per hour per IP (<code>429</code>) and 3 per hour per email, which still answers <code>200</code> but sends nothing.</li>
+              <li><code>resend-verification</code>: 10 per hour per IP and 3 per hour per account, so a client can&apos;t spam a user&apos;s inbox with verification emails.</li>
+              <li><code>newsletter/subscribe</code>: 10 per hour per IP.</li>
+              <li><code>auth/me</code>: 60 per minute per account.</li>
             </ul>
           </Section>
 

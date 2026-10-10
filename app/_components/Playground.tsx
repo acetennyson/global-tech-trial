@@ -144,7 +144,16 @@ function Account({ token, onAuth }: { token: string | null; onAuth: (t: string |
   }
 
   return (
-    <Section id="account" tone="dark" title="Start with an account." sub="Register or sign in. The token you get back is used automatically for every request below.">
+    <Section
+      id="account"
+      tone="dark"
+      title="Start with an account."
+      sub={
+        mode === "register"
+          ? "Register or sign in. The token you get back is used automatically for every request below. A new account can sign in and read right away, but creating, editing, deleting, or syncing tasks needs a verified email first — see “Verify your email” below."
+          : "Register or sign in. The token you get back is used automatically for every request below."
+      }
+    >
       <FormCard>
         <Segmented value={mode} onChange={setMode} options={[{ id: "register", label: "Register" }, { id: "login", label: "Sign in" }]} />
         <form onSubmit={submit} className="flex flex-col gap-4">
@@ -171,7 +180,7 @@ function useIsClient() {
   return useSyncExternalStore(subscribeNoop, () => true, () => false);
 }
 
-function CreateTaskForm({ token }: { token: string | null }) {
+function CreateTaskForm({ token, verified }: { token: string | null; verified: boolean | null }) {
   const [title, setTitle] = useState("Ship the release");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState<"todo" | "inProgress" | "done">("todo");
@@ -219,6 +228,11 @@ function CreateTaskForm({ token }: { token: string | null }) {
           </div>
           <div className="pt-1"><Button type="submit" loading={loading}>Create task</Button></div>
           {!token && <p className="text-sm text-[var(--mute)]">Not signed in yet. Running this will show the 401 the API returns.</p>}
+          {token && verified === false && (
+            <p className="text-sm text-[var(--mute)]">
+              Signed in but not verified. Running this will show the 403 the API returns — see “Verify your email” below.
+            </p>
+          )}
         </form>
       </FormCard>
       <ResultPanel call={result} loading={loading} />
@@ -226,11 +240,11 @@ function CreateTaskForm({ token }: { token: string | null }) {
   );
 }
 
-function CreateTask({ token }: { token: string | null }) {
+function CreateTask({ token, verified }: { token: string | null; verified: boolean | null }) {
   const isClient = useIsClient();
   return (
-    <Section id="create" tone="light" title="Create a task." sub="Times are validated, the creator comes from your token, and a retry never makes a duplicate.">
-      {isClient ? <CreateTaskForm token={token} /> : <div className="min-h-[520px] rounded-[28px] bg-[var(--card)] ring-1 ring-[var(--line)] lg:col-span-2" />}
+    <Section id="create" tone="light" title="Create a task." sub="Times are validated, the creator comes from your token, and a retry never makes a duplicate. Needs a verified email.">
+      {isClient ? <CreateTaskForm token={token} verified={verified} /> : <div className="min-h-[520px] rounded-[28px] bg-[var(--card)] ring-1 ring-[var(--line)] lg:col-span-2" />}
     </Section>
   );
 }
@@ -318,6 +332,72 @@ function ResetPassword() {
   );
 }
 
+function VerifyEmail({
+  token,
+  verified,
+  onVerified,
+  onAuth,
+}: {
+  token: string | null;
+  verified: boolean | null;
+  onVerified: (v: boolean) => void;
+  onAuth: (t: string | null, who: string | null) => void;
+}) {
+  const [resendEmail, setResendEmail] = useState("");
+  const [verifyToken, setVerifyToken] = useState("");
+  const { result, loading, run } = useCall(token); // only /me actually needs it; harmless on the others
+
+  async function resend(e: React.FormEvent) {
+    e.preventDefault();
+    await run("POST", "/api/auth/resend-verification", { email: resendEmail });
+  }
+
+  async function verify(e: React.FormEvent) {
+    e.preventDefault();
+    const r = await run("POST", "/api/auth/verify-email", { token: verifyToken });
+    const data = (r.body as { data?: { token?: string; user?: { email: string } } } | null)?.data;
+    if (data?.token) {
+      onAuth(data.token, data.user?.email ?? null); // the fresh token this returns, swapped in automatically
+      onVerified(true);
+    }
+  }
+
+  async function check() {
+    const r = await run("GET", "/api/auth/me");
+    const data = (r.body as { data?: { emailVerified?: boolean } } | null)?.data;
+    if (typeof data?.emailVerified === "boolean") onVerified(data.emailVerified);
+  }
+
+  return (
+    <Section
+      id="verify"
+      tone="gray"
+      title="Verify your email."
+      sub="Registering sends a verification email with a link. Paste the token from that link below, or request a new one. Verifying takes effect immediately, on your very next request — no need to sign in again."
+    >
+      <FormCard>
+        <form onSubmit={resend} className="flex flex-col gap-4">
+          <Field label="Email"><input className={inputCls} type="email" autoComplete="email" placeholder="ada@example.com" value={resendEmail} onChange={(e) => setResendEmail(e.target.value)} required /></Field>
+          <div><Button type="submit" loading={loading}>Resend verification email</Button></div>
+        </form>
+        <hr className="border-[var(--line)]" />
+        <form onSubmit={verify} className="flex flex-col gap-4">
+          <Field label="Verification token"><input className={inputCls} placeholder="Paste token from the email link" value={verifyToken} onChange={(e) => setVerifyToken(e.target.value)} required /></Field>
+          <div><Button type="submit" loading={loading}>Verify</Button></div>
+        </form>
+        <hr className="border-[var(--line)]" />
+        <div className="flex items-center justify-between gap-4">
+          <p className="text-sm text-[var(--mute)]">
+            {token ? (verified === null ? "Check your current account's status." : verified ? "Your signed-in account is verified." : "Your signed-in account is not verified yet.") : "Sign in above first."}
+          </p>
+          <Button type="button" onClick={check} loading={loading} disabled={!token}>Check my account</Button>
+        </div>
+      </FormCard>
+      <ResultPanel call={result} loading={loading} />
+    </Section>
+  );
+}
+
 function Health() {
   const { result, loading, run } = useCall(null);
   return (
@@ -336,19 +416,40 @@ function Health() {
 export default function Playground() {
   const [token, setToken] = useState<string | null>(null);
   const [who, setWho] = useState<string | null>(null);
+  // null = unknown yet (not signed in, or haven't checked). Refreshed on every sign-in via
+  // GET /api/auth/me, and by "Verify" below the moment it succeeds, so the badge never lies.
+  const [verified, setVerified] = useState<boolean | null>(null);
+
+  async function handleAuth(t: string | null, w: string | null) {
+    setToken(t);
+    setWho(w);
+    if (!t) {
+      setVerified(null);
+      return;
+    }
+    const res = await fetch("/api/auth/me", { headers: { authorization: `Bearer ${t}` } });
+    const body = await res.json().catch(() => null);
+    setVerified(typeof body?.data?.emailVerified === "boolean" ? body.data.emailVerified : null);
+  }
 
   return (
     <>
-      <div className="fixed right-4 top-14 z-40" aria-live="polite">
+      <div className="fixed right-4 top-14 z-40 flex flex-col items-end gap-1.5" aria-live="polite">
         {token && (
           <span className="rounded-full bg-[#34c759]/15 px-3.5 py-1.5 text-sm font-medium text-[#248a3d] ring-1 ring-[#34c759]/30 backdrop-blur">
             Signed in{who ? ` as ${who}` : ""}
           </span>
         )}
+        {token && verified === false && (
+          <span className="rounded-full bg-[#ff9500]/15 px-3.5 py-1.5 text-sm font-medium text-[#9a6700] ring-1 ring-[#ff9500]/30 backdrop-blur">
+            Email not verified
+          </span>
+        )}
       </div>
-      <Account token={token} onAuth={(t, w) => { setToken(t); setWho(w); }} />
-      <CreateTask token={token} />
+      <Account token={token} onAuth={handleAuth} />
+      <CreateTask token={token} verified={verified} />
       <Tasks token={token} />
+      <VerifyEmail token={token} verified={verified} onVerified={setVerified} onAuth={handleAuth} />
       <ResetPassword />
       <Health />
     </>

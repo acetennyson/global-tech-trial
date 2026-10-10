@@ -13,6 +13,9 @@ DROP TABLE IF EXISTS newsletter_subscribers;
 DROP TABLE IF EXISTS users;
 
 -- Registered users. tasks.created_by_id is a foreign key to this table.
+-- email_verified_at is NULL until the owner proves they control the address (see
+-- email_verification_tokens below). Reads and login work either way; lib/auth
+-- requireVerifiedEmail() is what gates task-mutating endpoints on it.
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
@@ -36,7 +39,9 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user ON password_reset_tokens (user_id);
 
 -- Email verification links. Same shape as password_reset_tokens, and the same reason:
--- only the hash is stored, single-use via used_at, time-limited via expires_at.
+-- only the hash is stored, single-use via used_at, time-limited via expires_at. Longer
+-- TTL than a password reset (24h, not 1h) since getting locked out of verifying is a
+-- bigger annoyance than a missed reset link, which can just be requested again.
 CREATE TABLE IF NOT EXISTS email_verification_tokens (
   id TEXT PRIMARY KEY,
   token_hash TEXT NOT NULL UNIQUE,

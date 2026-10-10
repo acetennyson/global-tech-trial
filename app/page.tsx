@@ -19,6 +19,10 @@ const features: { title: string; text: string }[] = [
     text: "Register and log in to get a Bearer token. Passwords are hashed with bcrypt, and password reset links are single-use and expire after one hour.",
   },
   {
+    title: "Email verification",
+    text: "A new account can sign in and read right away. Creating, editing, deleting, or syncing tasks needs a verified email first, checked fresh on every request, so verifying takes effect immediately, no re-login needed.",
+  },
+  {
     title: "Version-checked edits",
     text: "Every task carries a version. A save with a stale version gets a 409 with the current task, so two people editing at once never overwrite each other.",
   },
@@ -73,7 +77,12 @@ const faqs: { question: string; answer: string }[] = [
   {
     question: "Is there rate limiting?",
     answer:
-      "Yes. Register, login and forgot-password are rate limited and return 429 with a Retry-After header when you go over the limit. See the API documentation for the exact limits.",
+      "Yes, on several endpoints, including register, login, forgot-password and resend-verification. Each returns 429 with a Retry-After header when you go over the limit. See the API documentation for the exact limits.",
+  },
+  {
+    question: "Does a new account need to verify its email?",
+    answer:
+      "Signing in and reading tasks work right after registering. Creating, editing, deleting, bulk-editing and syncing tasks need a verified email: POST /api/auth/register sends a verification email, and GET /api/auth/verify-email?token=... (the link) or POST /api/auth/verify-email (the token in a request body) completes it. Verifying is checked fresh from the database on every request, so it takes effect immediately, without signing in again.",
   },
 ];
 
@@ -84,6 +93,10 @@ const endpoints: { method: string; path: string; note: string }[] = [
   { method: "POST", path: "/api/auth/login", note: "Exchange credentials for a JWT" },
   { method: "POST", path: "/api/auth/forgot-password", note: "Request a password reset email" },
   { method: "POST", path: "/api/auth/reset-password", note: "Set a new password with a reset token" },
+  { method: "GET", path: "/api/auth/verify-email", note: "Verify by clicking the emailed link" },
+  { method: "POST", path: "/api/auth/verify-email", note: "Verify with a token, returns a fresh JWT" },
+  { method: "POST", path: "/api/auth/resend-verification", note: "Request a new verification email" },
+  { method: "GET", path: "/api/auth/me", note: "Your own profile, including verification status" },
   { method: "GET", path: "/api/tasks", note: "List and filter tasks" },
   { method: "POST", path: "/api/tasks", note: "Create a task, idempotent with a key" },
   { method: "PATCH", path: "/api/tasks", note: "Bulk update your own tasks" },
@@ -106,6 +119,7 @@ export default function Home() {
             <li><a href="#account" className="hover:text-black">Account</a></li>
             <li><a href="#create" className="hover:text-black">Create</a></li>
             <li><a href="#tasks" className="hover:text-black">Tasks</a></li>
+            <li><a href="#verify" className="hover:text-black">Verify</a></li>
             <li><a href="#reset" className="hover:text-black">Reset</a></li>
             <li><a href="#health" className="hover:text-black">Health</a></li>
             <li><a href="#reference" className="hover:text-black">Reference</a></li>
